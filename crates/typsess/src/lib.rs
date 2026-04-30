@@ -1,21 +1,27 @@
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::anyhow;
 use comemo::{Constraint, Track};
 use ecow::{EcoVec, eco_vec};
-use tinymist_world::args::CompileFontArgs;
+use tinymist_vfs::ImmutDict;
+use tinymist_world::args::CompilePackageArgs;
+use tinymist_world::config::CompileFontOpts;
+use tinymist_world::font::{FontResolverImpl, system::SystemFontSearcher};
 use tinymist_world::system::{SystemUniverseBuilder, TypstSystemWorld};
 use tinymist_world::{EntryState, ShadowApi};
 use typst::World;
 use typst::diag::{At, SourceDiagnostic};
 use typst::engine::{Engine, Route, Sink, Traced};
 use typst::foundations::{
-    Bytes, Content, Context, Scope, Scopes, Style, StyleChain, Styles, Target, TargetElem, Value,
-    ops,
+    Bytes, Content, Context, IntoValue, Scope, Scopes, Style, StyleChain, Styles, Target,
+    TargetElem, Value, ops,
 };
 use typst::introspection::Introspector;
 use typst::layout::PagedDocument;
 use typst::syntax::{Span, VirtualPath, ast, ast::AstNode, parse_code};
+use typst::utils::LazyHash;
 use typst_eval::{Eval, Vm};
 
 mod input;
@@ -29,6 +35,17 @@ use persist::{collect_introspection_updates, filter_persistent_styles};
 pub enum RenderMode {
     Svg,
     Html,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct WorldOptions {
+    pub root: Option<PathBuf>,
+    pub inputs: Vec<(String, String)>,
+    pub font_paths: Vec<PathBuf>,
+    pub ignore_system_fonts: bool,
+    pub ignore_embedded_fonts: bool,
+    pub package_path: Option<PathBuf>,
+    pub package_cache_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,7 +96,15 @@ pub struct TypstReplSession {
 
 impl TypstReplSession {
     pub fn new(render_mode: RenderMode, page_setup: PageSetup) -> typst::diag::SourceResult<Self> {
-        let world = create_world()?;
+        Self::new_with_world_options(render_mode, page_setup, WorldOptions::default())
+    }
+
+    pub fn new_with_world_options(
+        render_mode: RenderMode,
+        page_setup: PageSetup,
+        world_options: WorldOptions,
+    ) -> typst::diag::SourceResult<Self> {
+        let world = create_world(&world_options)?;
         let mut session = Self {
             render_mode,
             scope: Scope::new(),
@@ -398,15 +423,55 @@ fn layout_current_document<D: LayoutTarget>(
 
     unreachable!("layout loop always returns within five iterations")
 }
-fn create_world() -> typst::diag::SourceResult<TypstSystemWorld> {
-    let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+fn create_world(options: &WorldOptions) -> typst::diag::SourceResult<TypstSystemWorld> {
+    let root = options
+        .root
+        .clone()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    let root = if root.is_absolute() {
+        root
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(root)
+    };
     let entry = EntryState::new_rooted(root.into(), Some(VirtualPath::new(Path::new("/main.typ"))));
-    let fonts = SystemUniverseBuilder::resolve_fonts(CompileFontArgs::default())
-        .map_err(|error| source_error(error.to_string()))?;
-    let package_registry = SystemUniverseBuilder::resolve_package(None, None);
-    let universe =
-        SystemUniverseBuilder::build(entry, Default::default(), fonts.into(), package_registry);
+    let fonts = resolve_fonts(options).map_err(|error| source_error(error.to_string()))?;
+    let package_options = CompilePackageArgs {
+        package_path: options.package_path.clone(),
+        package_cache_path: options.package_cache_path.clone(),
+    };
+    let package_registry = SystemUniverseBuilder::resolve_package(None, Some(&package_options));
+    let universe = SystemUniverseBuilder::build(
+        entry,
+        resolve_inputs(options),
+        fonts.into(),
+        package_registry,
+    );
     Ok(universe.snapshot())
+}
+
+fn resolve_inputs(options: &WorldOptions) -> ImmutDict {
+    let pairs = options
+        .inputs
+        .iter()
+        .map(|(key, value)| (key.as_str().into(), value.as_str().into_value()));
+    Arc::new(LazyHash::new(pairs.collect()))
+}
+
+fn resolve_fonts(options: &WorldOptions) -> anyhow::Result<FontResolverImpl> {
+    let mut searcher = SystemFontSearcher::new();
+    let embedded_fonts = if options.ignore_embedded_fonts {
+        Vec::new()
+    } else {
+        typst_assets::fonts().map(Cow::Borrowed).collect()
+    };
+    searcher.resolve_opts(CompileFontOpts {
+        font_paths: options.font_paths.clone(),
+        no_system_fonts: options.ignore_system_fonts,
+        with_embedded_fonts: embedded_fonts,
+    })?;
+    Ok(searcher.build())
 }
 
 #[cfg(test)]

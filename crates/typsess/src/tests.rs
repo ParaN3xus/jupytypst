@@ -196,6 +196,44 @@ fn classifies_invalid_input() {
     ));
 }
 
+#[test]
+fn world_inputs_are_visible_to_sys_inputs() {
+    let mut session = TypstReplSession::new_with_world_options(
+        RenderMode::Html,
+        PageSetup::Default,
+        WorldOptions {
+            inputs: vec![("name".into(), "typst".into())],
+            ..WorldOptions::default()
+        },
+    )
+    .unwrap();
+
+    let html = html_output(session.execute("sys.inputs.name").unwrap());
+    assert!(html.contains("typst"));
+}
+
+#[test]
+fn world_root_controls_relative_imports() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    std::fs::write(temp_dir.path().join("defs.typ"), "#let value = [Imported]").unwrap();
+    let mut session = TypstReplSession::new_with_world_options(
+        RenderMode::Html,
+        PageSetup::Default,
+        WorldOptions {
+            root: Some(temp_dir.path().to_path_buf()),
+            ..WorldOptions::default()
+        },
+    )
+    .unwrap();
+
+    let html = html_output(
+        session
+            .execute("import \"defs.typ\": value\nvalue")
+            .unwrap(),
+    );
+    assert!(html.contains("Imported"));
+}
+
 fn svg_session() -> TypstReplSession {
     TypstReplSession::new(RenderMode::Svg, PageSetup::Default).unwrap()
 }

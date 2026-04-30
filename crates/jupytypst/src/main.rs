@@ -7,7 +7,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use jupyter_protocol::JupyterKernelspec;
 use tempfile::TempDir;
-use typsess::{PageSetup, RenderMode};
+use typsess::{PageSetup, RenderMode, WorldOptions};
 
 mod cell;
 mod kernel;
@@ -16,6 +16,7 @@ mod repl;
 
 const KERNEL_NAME: &str = "jupytypst";
 const DISPLAY_NAME: &str = "Typst (Code Mode)";
+const ENV_PATH_SEP: char = if cfg!(windows) { ';' } else { ':' };
 
 #[derive(Debug, Parser)]
 #[command(author, version, about)]
@@ -37,37 +38,106 @@ enum CommandKind {
 #[derive(Debug, Args)]
 struct StartArgs {
     /// Path to the Jupyter connection file.
-    #[arg(short = 'f', long = "connection-file")]
+    #[arg(long = "connection-file")]
     connection_file: PathBuf,
     /// Page setup injected before each rendered cell. Omit for `set page(width: auto, height: auto, margin: 16pt)`, use `none` to disable, or pass Typst code.
     #[arg(long)]
     page_setup: Option<String>,
+    /// The format of rendered kernel output.
+    #[arg(short = 'f', long = "format", value_enum, default_value_t = CliOutputFormat::Svg)]
+    format: CliOutputFormat,
+    #[command(flatten)]
+    world: WorldArgs,
 }
 
 #[derive(Debug, Args)]
 struct ReplArgs {
-    /// Render mode for terminal output.
-    #[arg(long, value_enum, default_value_t = CliRenderMode::Html)]
-    mode: CliRenderMode,
+    /// The format of rendered terminal output.
+    #[arg(short = 'f', long = "format", value_enum, default_value_t = CliOutputFormat::Html)]
+    format: CliOutputFormat,
     /// Print complete HTML documents instead of only the body contents.
     #[arg(long)]
     full_html: bool,
     /// Page setup for rendered cells. Omit for `set page(width: auto, height: auto, margin: 16pt)`, use `none` to disable, or pass Typst code.
     #[arg(long)]
     page_setup: Option<String>,
+    #[command(flatten)]
+    world: WorldArgs,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
-enum CliRenderMode {
+enum CliOutputFormat {
+    Pdf,
+    Png,
     Svg,
     Html,
 }
 
-impl From<CliRenderMode> for RenderMode {
-    fn from(value: CliRenderMode) -> Self {
+impl TryFrom<CliOutputFormat> for RenderMode {
+    type Error = anyhow::Error;
+
+    fn try_from(value: CliOutputFormat) -> Result<Self> {
         match value {
-            CliRenderMode::Svg => Self::Svg,
-            CliRenderMode::Html => Self::Html,
+            CliOutputFormat::Svg => Ok(Self::Svg),
+            CliOutputFormat::Html => Ok(Self::Html),
+            CliOutputFormat::Pdf | CliOutputFormat::Png => {
+                bail!("format `{}` is not supported yet", value.as_str())
+            }
+        }
+    }
+}
+
+impl CliOutputFormat {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Pdf => "pdf",
+            Self::Png => "png",
+            Self::Svg => "svg",
+            Self::Html => "html",
+        }
+    }
+}
+
+#[derive(Debug, Args)]
+struct WorldArgs {
+    /// Configures the project root (for absolute paths).
+    #[arg(long, value_name = "DIR", env = "TYPST_ROOT")]
+    root: Option<PathBuf>,
+    /// Add a string key-value pair visible through `sys.inputs`.
+    #[arg(long = "input", value_name = "key=value", value_parser = parse_input_pair)]
+    inputs: Vec<(String, String)>,
+    /// Adds additional directories that are recursively searched for fonts.
+    #[arg(
+        long = "font-path",
+        value_name = "DIR",
+        env = "TYPST_FONT_PATHS",
+        value_delimiter = ENV_PATH_SEP
+    )]
+    font_paths: Vec<PathBuf>,
+    /// Ensures system fonts won't be searched, unless explicitly included via `--font-path`.
+    #[arg(long, env = "TYPST_IGNORE_SYSTEM_FONTS")]
+    ignore_system_fonts: bool,
+    /// Ensures fonts embedded into Typst won't be considered.
+    #[arg(long, env = "TYPST_IGNORE_EMBEDDED_FONTS")]
+    ignore_embedded_fonts: bool,
+    /// Custom path to local packages, defaults to system-dependent location.
+    #[arg(long, value_name = "DIR", env = "TYPST_PACKAGE_PATH")]
+    package_path: Option<PathBuf>,
+    /// Custom path to package cache, defaults to system-dependent location.
+    #[arg(long, value_name = "DIR", env = "TYPST_PACKAGE_CACHE_PATH")]
+    package_cache_path: Option<PathBuf>,
+}
+
+impl From<WorldArgs> for WorldOptions {
+    fn from(value: WorldArgs) -> Self {
+        Self {
+            root: value.root,
+            inputs: value.inputs,
+            font_paths: value.font_paths,
+            ignore_system_fonts: value.ignore_system_fonts,
+            ignore_embedded_fonts: value.ignore_embedded_fonts,
+            package_path: value.package_path,
+            package_cache_path: value.package_cache_path,
         }
     }
 }
@@ -106,17 +176,35 @@ async fn start_kernel(args: StartArgs) -> Result<()> {
     kernel::run(
         args.connection_file,
         args.page_setup.unwrap_or_else(|| "default".to_string()),
+        args.format.try_into()?,
+        args.world.into(),
     )
     .await
 }
 
 fn start_repl(args: ReplArgs) -> Result<()> {
     let page_setup = parse_page_setup(args.page_setup)?;
-    repl::run(args.mode.into(), page_setup, args.full_html)
+    repl::run(
+        args.format.try_into()?,
+        page_setup,
+        args.full_html,
+        args.world.into(),
+    )
 }
 
 fn parse_page_setup(page_setup: Option<String>) -> Result<PageSetup> {
     PageSetup::parse(page_setup.as_deref().unwrap_or("default"))
+}
+
+fn parse_input_pair(raw: &str) -> Result<(String, String), String> {
+    let (key, value) = raw
+        .split_once('=')
+        .ok_or_else(|| "input must be a key and a value separated by an equal sign".to_string())?;
+    let key = key.trim().to_string();
+    if key.is_empty() {
+        return Err("the key was missing or empty".to_string());
+    }
+    Ok((key, value.trim().to_string()))
 }
 
 fn install_kernelspec(args: InstallArgs) -> Result<()> {

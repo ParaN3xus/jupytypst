@@ -19,20 +19,26 @@ use crate::DISPLAY_NAME;
 use crate::cell::parse_cell;
 use crate::output::{execution_output_to_html, format_diagnostics};
 use typsess::{
-    ExecutionOutput, InputStatus, PageSetup, RenderMode, TypstReplSession, classify_input,
+    ExecutionOutput, InputStatus, PageSetup, RenderMode, TypstReplSession, WorldOptions,
+    classify_input,
 };
 
 const JUPYTER_PROTOCOL_VERSION: &str = "5.3";
 const KERNEL_IMPLEMENTATION: &str = env!("CARGO_PKG_NAME");
 const KERNEL_IMPLEMENTATION_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-pub async fn run(connection_file: PathBuf, page_setup: String) -> Result<()> {
+pub async fn run(
+    connection_file: PathBuf,
+    page_setup: String,
+    default_mode: RenderMode,
+    world_options: WorldOptions,
+) -> Result<()> {
     let bytes = std::fs::read(&connection_file)
         .with_context(|| format!("failed to read {}", connection_file.display()))?;
     let connection_info =
         serde_json::from_slice(&bytes).context("failed to parse connection file")?;
     let page_setup = PageSetup::parse(&page_setup)?;
-    KernelServer::run(connection_info, page_setup).await
+    KernelServer::run(connection_info, page_setup, default_mode, world_options).await
 }
 
 struct KernelServer {
@@ -47,6 +53,8 @@ impl KernelServer {
     async fn run(
         connection_info: jupyter_protocol::ConnectionInfo,
         page_setup: PageSetup,
+        default_mode: RenderMode,
+        world_options: WorldOptions,
     ) -> Result<()> {
         let session_id = Uuid::new_v4().to_string();
         let mut heartbeat = create_kernel_heartbeat_connection(&connection_info).await?;
@@ -87,9 +95,13 @@ impl KernelServer {
             execution_count: ExecutionCount::new(0),
             iopub,
             shell: shell_writer,
-            typst: TypstReplSession::new(RenderMode::Svg, page_setup)
-                .map_err(|diagnostics| anyhow!(format_diagnostics(diagnostics)))?,
-            default_mode: RenderMode::Svg,
+            typst: TypstReplSession::new_with_world_options(
+                default_mode,
+                page_setup,
+                world_options,
+            )
+            .map_err(|diagnostics| anyhow!(format_diagnostics(diagnostics)))?,
+            default_mode,
         };
         let shell_handle =
             tokio::spawn(async move { kernel.shell_loop(shell_reader, shutdown_rx).await });
