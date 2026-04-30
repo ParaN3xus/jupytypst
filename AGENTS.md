@@ -28,5 +28,7 @@ This repository implements `jupytypst`, a Rust Jupyter kernel for Typst.
   `set page(width: auto, height: auto, margin: 16pt)` before user code.
   `--page-setup none` disables this, and `--page-setup <Typst code>` overrides
   it.
+- Do not persist `set page(...)` between cells; page setup must reset for each
+  rendered cell unless the user disables automatic page setup.
 - Persist only top-level definition/configuration statements between cells:
   `let`, `set`, `show`, `import`, and `include`.

@@ -17,6 +17,8 @@ interactive Typst evaluation with notebook-friendly display outputs.
   without a leading `#`.
 - Default page setup is `set page(width: auto, height: auto, margin: 16pt)`.
   CLI users can pass `--page-setup none` or custom Typst page setup code.
+- `set page(...)` applies only to the cell where it appears; it is not stored
+  in cross-cell context.
 
 ## Design Notes
 

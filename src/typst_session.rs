@@ -187,6 +187,9 @@ fn normalize_code_statement(code: &str) -> &str {
 }
 
 fn is_context_statement(code: &str) -> bool {
+    if code.starts_with("set page") {
+        return false;
+    }
     ["let ", "set ", "show ", "import ", "include "]
         .iter()
         .any(|prefix| code.starts_with(prefix))
@@ -351,8 +354,11 @@ mod tests {
 
     #[test]
     fn extracts_code_context_without_visible_content() {
-        let context = extract_context_code("let x = 1\nlorem(100)\n[Test]", Mode::Svg);
-        assert_eq!(context, vec!["let x = 1"]);
+        let context = extract_context_code(
+            "let x = 1\nset page(paper: \"a4\")\nset text(size: 14pt)\nlorem(100)\n[Test]",
+            Mode::Svg,
+        );
+        assert_eq!(context, vec!["let x = 1", "set text(size: 14pt)"]);
     }
 
     #[test]
@@ -388,6 +394,16 @@ mod tests {
             ExecutionOutput::Svg(html) => assert!(html.contains("<svg")),
             other => panic!("unexpected output: {other:?}"),
         }
+    }
+
+    #[test]
+    fn page_set_rules_do_not_persist_between_cells() {
+        let mut session = TypstSession::default();
+        session.execute("set page(paper: \"a4\")\n[First]").unwrap();
+
+        let source = session.render_source("[Second]");
+        assert!(source.contains("set page(width: auto, height: auto, margin: 16pt)"));
+        assert!(!source.contains("paper: \"a4\""));
     }
 
     #[test]
