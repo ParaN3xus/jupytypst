@@ -5,7 +5,7 @@ use ecow::{EcoVec, eco_format};
 use parking_lot::Mutex;
 use typst::diag::{FileError, FileResult, SourceDiagnostic};
 use typst::foundations::{Bytes, Datetime};
-use typst::layout::{Abs, PagedDocument};
+use typst::layout::PagedDocument;
 use typst::syntax::{FileId, Source, VirtualPath};
 use typst::text::{Font, FontBook};
 use typst::utils::LazyHash;
@@ -95,10 +95,7 @@ impl TypstSession {
         let world = SessionWorld::new(&self.root, &source, self.fonts.clone_for_world());
         let warned = typst::compile::<PagedDocument>(&world);
         let document = warned.output.map_err(format_diagnostics)?;
-        Ok(ExecutionOutput::Svg(typst_svg::svg_merged(
-            &document,
-            Abs::pt(0.0),
-        )))
+        Ok(ExecutionOutput::Svg(svg_pages_html(&document)))
     }
 
     fn render_html(&self, markup: &str) -> Result<ExecutionOutput> {
@@ -199,6 +196,39 @@ fn format_diagnostics(diagnostics: EcoVec<SourceDiagnostic>) -> anyhow::Error {
         .collect::<Vec<_>>()
         .join("\n");
     anyhow!(message)
+}
+
+fn svg_pages_html(document: &PagedDocument) -> String {
+    let pages = document
+        .pages
+        .iter()
+        .map(|page| {
+            format!(
+                r#"<div class="jupytypst-page">{}</div>"#,
+                typst_svg::svg(page)
+            )
+        })
+        .collect::<String>();
+    format!(
+        r#"<style>
+.jupytypst-pages {{
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: flex-start;
+}}
+.jupytypst-page {{
+  max-width: 100%;
+  overflow: auto;
+}}
+.jupytypst-page > svg {{
+  display: block;
+  max-width: 100%;
+  height: auto;
+}}
+</style>
+<div class="jupytypst-pages">{pages}</div>"#
+    )
 }
 
 #[derive(Debug)]
@@ -365,5 +395,20 @@ mod tests {
         let session = TypstSession::new(PageSetup::Custom("set page(paper: \"a4\")".into()));
         let source = session.render_source("= Test");
         assert!(source.starts_with("#set page(paper: \"a4\")"));
+    }
+
+    #[test]
+    fn svg_mode_wraps_multiple_pages_as_independent_svgs() {
+        let mut session = TypstSession::default();
+        let output = session
+            .execute("// jupytypst: mode=svg\nx\n\n#pagebreak()\n\nx")
+            .unwrap();
+        match output {
+            ExecutionOutput::Svg(html) => {
+                assert!(html.contains("jupytypst-pages"));
+                assert!(html.matches("<svg").count() >= 2);
+            }
+            other => panic!("unexpected output: {other:?}"),
+        }
     }
 }

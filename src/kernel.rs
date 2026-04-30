@@ -256,8 +256,8 @@ impl KernelServer {
         parent: &JupyterMessage,
     ) -> Result<()> {
         let media = match output {
-            ExecutionOutput::Svg(svg) => Media::new(vec![
-                MediaType::Svg(svg),
+            ExecutionOutput::Svg(html) => Media::new(vec![
+                MediaType::Html(html),
                 MediaType::Plain("<svg>".to_string()),
             ]),
             ExecutionOutput::Html(html) => Media::new(vec![
