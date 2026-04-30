@@ -37,9 +37,6 @@ fn parse_directive(rest: &str) -> Result<RenderMode> {
         return Err(anyhow!("unsupported jupytypst directive `{rest}`"));
     };
     match value {
-        "eval" => Err(anyhow!(
-            "jupytypst no longer supports mode=eval; use mode=svg or mode=html"
-        )),
         "svg" => Ok(RenderMode::Svg),
         "html" => Ok(RenderMode::Html),
         other => Err(anyhow!("unsupported jupytypst mode `{other}`")),
@@ -58,9 +55,9 @@ mod tests {
     }
 
     #[test]
-    fn rejects_eval_mode() {
-        let error = parse_cell("// jupytypst: mode=eval\n1 + 2", RenderMode::Svg).unwrap_err();
-        assert!(error.to_string().contains("mode=eval"));
+    fn rejects_unsupported_mode() {
+        let error = parse_cell("// jupytypst: mode=pdf\n1 + 2", RenderMode::Svg).unwrap_err();
+        assert!(error.to_string().contains("unsupported jupytypst mode"));
     }
 
     #[test]

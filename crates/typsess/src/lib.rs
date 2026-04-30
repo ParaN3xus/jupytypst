@@ -116,8 +116,7 @@ impl TypstReplSession {
 
     fn initialize_page_setup(&mut self, page_setup: PageSetup) -> typst::diag::SourceResult<()> {
         if let Some(page_setup) = page_setup.code() {
-            let setup = normalize_code_statement(page_setup);
-            let evaluated = self.evaluate_source(setup, StyleCapture::Local)?;
+            let evaluated = self.evaluate_source(page_setup, StyleCapture::Local)?;
             self.styles.apply(evaluated.captured_styles);
         }
         Ok(())
@@ -205,13 +204,13 @@ impl TypstReplSession {
 
     fn render_svg(&self, content: Content) -> typst::diag::SourceResult<ExecutionOutput> {
         let world = self.world.paged_task();
-        let document = layout_paged_document(world.as_ref(), &content)?;
+        let document = layout_current_document(world.as_ref(), &content)?;
         Ok(ExecutionOutput::Paged(document))
     }
 
     fn render_html(&self, content: Content) -> typst::diag::SourceResult<ExecutionOutput> {
         let world = self.world.html_task();
-        let document = layout_html_document(world.as_ref(), &content)?;
+        let document = layout_current_document(world.as_ref(), &content)?;
         Ok(ExecutionOutput::Html(document))
     }
 
@@ -233,10 +232,6 @@ impl Default for TypstReplSession {
     fn default() -> Self {
         Self::new(RenderMode::Html, PageSetup::Default).expect("default page setup should be valid")
     }
-}
-
-fn normalize_code_statement(code: &str) -> &str {
-    code.trim_start_matches('#').trim_start()
 }
 
 struct EvaluatedCell {
@@ -328,13 +323,57 @@ fn eval_code_capture<'a>(
     Ok(output)
 }
 
-fn layout_paged_document(
+trait LayoutTarget: Sized {
+    const TARGET: Target;
+
+    fn layout(
+        engine: &mut Engine,
+        content: &Content,
+        styles: StyleChain,
+    ) -> typst::diag::SourceResult<Self>;
+
+    fn introspector(&self) -> &Introspector;
+}
+
+impl LayoutTarget for PagedDocument {
+    const TARGET: Target = Target::Paged;
+
+    fn layout(
+        engine: &mut Engine,
+        content: &Content,
+        styles: StyleChain,
+    ) -> typst::diag::SourceResult<Self> {
+        typst_layout::layout_document(engine, content, styles)
+    }
+
+    fn introspector(&self) -> &Introspector {
+        &self.introspector
+    }
+}
+
+impl LayoutTarget for typst_html::HtmlDocument {
+    const TARGET: Target = Target::Html;
+
+    fn layout(
+        engine: &mut Engine,
+        content: &Content,
+        styles: StyleChain,
+    ) -> typst::diag::SourceResult<Self> {
+        typst_html::html_document(engine, content, styles)
+    }
+
+    fn introspector(&self) -> &Introspector {
+        &self.introspector
+    }
+}
+
+fn layout_current_document<D: LayoutTarget>(
     world: &dyn World,
     content: &Content,
-) -> typst::diag::SourceResult<PagedDocument> {
+) -> typst::diag::SourceResult<D> {
     let library = world.library();
     let base = StyleChain::new(&library.styles);
-    let target_style = TargetElem::target.set(Target::Paged).wrap();
+    let target_style = TargetElem::target.set(D::TARGET).wrap();
     let styles = base.chain(&target_style);
     let empty_introspector = Introspector::default();
     let traced = Traced::default();
@@ -343,7 +382,7 @@ fn layout_paged_document(
     for iteration in 0..5 {
         let current_introspector = previous
             .as_ref()
-            .map(|document: &PagedDocument| &document.introspector)
+            .map(LayoutTarget::introspector)
             .unwrap_or(&empty_introspector);
         let constraint = Constraint::new();
         let mut sink = Sink::new();
@@ -356,7 +395,7 @@ fn layout_paged_document(
                 sink: sink.track_mut(),
                 route: Route::default(),
             };
-            typst_layout::layout_document(&mut engine, content, styles)?
+            D::layout(&mut engine, content, styles)?
         };
 
         let delayed = sink.delayed();
@@ -364,7 +403,7 @@ fn layout_paged_document(
             return Err(delayed);
         }
 
-        if constraint.validate(&document.introspector) || iteration == 4 {
+        if constraint.validate(document.introspector()) || iteration == 4 {
             return Ok(document);
         }
 
@@ -373,59 +412,9 @@ fn layout_paged_document(
 
     unreachable!("layout loop always returns within five iterations")
 }
-
-fn layout_html_document(
-    world: &dyn World,
-    content: &Content,
-) -> typst::diag::SourceResult<typst_html::HtmlDocument> {
-    let library = world.library();
-    let base = StyleChain::new(&library.styles);
-    let target_style = TargetElem::target.set(Target::Html).wrap();
-    let styles = base.chain(&target_style);
-    let introspector = Introspector::default();
-    let traced = Traced::default();
-    let mut previous = None;
-
-    for iteration in 0..5 {
-        let current_introspector = previous
-            .as_ref()
-            .map(|document: &typst_html::HtmlDocument| &document.introspector)
-            .unwrap_or(&introspector);
-        let constraint = Constraint::new();
-        let mut sink = Sink::new();
-        let document = {
-            let mut engine = Engine {
-                routines: &typst::ROUTINES,
-                world: world.track(),
-                introspector: current_introspector.track_with(&constraint),
-                traced: traced.track(),
-                sink: sink.track_mut(),
-                route: Route::default(),
-            };
-            typst_html::html_document(&mut engine, content, styles)?
-        };
-
-        let delayed = sink.delayed();
-        if !delayed.is_empty() {
-            return Err(delayed);
-        }
-
-        if constraint.validate(&document.introspector) || iteration == 4 {
-            return Ok(document);
-        }
-
-        previous = Some(document);
-    }
-
-    unreachable!("layout loop always returns within five iterations")
-}
-
 fn create_world() -> typst::diag::SourceResult<TypstSystemWorld> {
     let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let entry = EntryState::new_rooted(
-        root.into(),
-        Some(VirtualPath::new(Path::new("/__jupytypst__.typ"))),
-    );
+    let entry = EntryState::new_rooted(root.into(), Some(VirtualPath::new(Path::new("/main.typ"))));
     let fonts = SystemUniverseBuilder::resolve_fonts(CompileFontArgs::default())
         .map_err(|error| source_error(error.to_string()))?;
     let package_registry = SystemUniverseBuilder::resolve_package(None, None);

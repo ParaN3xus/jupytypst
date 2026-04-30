@@ -308,7 +308,7 @@ fn kernel_info() -> KernelInfoReply {
         implementation_version: env!("CARGO_PKG_VERSION").to_string(),
         language_info: LanguageInfo {
             name: "typst-code".to_string(),
-            version: "0.14".to_string(),
+            version: typst::syntax::package::PackageVersion::compiler().to_string(),
             mimetype: Some("text/x-typst-code".to_string()),
             file_extension: Some(".typc".to_string()),
             pygments_lexer: Some("typst-code".to_string()),

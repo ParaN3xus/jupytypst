@@ -79,7 +79,7 @@ fn page_setup_none_does_not_initialize_page_styles() {
 fn page_setup_custom_initializes_persistent_styles() {
     let session = TypstReplSession::new(
         RenderMode::Svg,
-        PageSetup::Custom("#set page(fill: red)".into()),
+        PageSetup::Custom("set page(fill: red)".into()),
     )
     .unwrap();
     assert!(session_has_style_for(&session, "page", "fill"));
