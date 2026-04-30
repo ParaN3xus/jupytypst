@@ -318,4 +318,35 @@ mod tests {
         let context = extract_context_code("#let x = 1\n#lorem(100)\n= Test", Mode::Svg);
         assert_eq!(context, vec!["let x = 1"]);
     }
+
+    #[test]
+    fn eval_mode_preserves_definitions() {
+        let mut session = TypstSession::new();
+        let first = session.execute("let f(a, b) = a + b").unwrap();
+        assert!(matches!(first, ExecutionOutput::PlainText(_)));
+
+        let second = session.execute("f(1, 2)").unwrap();
+        match second {
+            ExecutionOutput::PlainText(text) => assert_eq!(text, "3"),
+            other => panic!("unexpected output: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn svg_mode_does_not_rerender_previous_visible_content() {
+        let mut session = TypstSession::new();
+        session
+            .execute("// jupytypst: mode=svg\n#lorem(20)")
+            .unwrap();
+        assert!(session.context_code.is_empty());
+
+        let output = session.execute("// jupytypst: mode=svg\n= Test").unwrap();
+        match output {
+            ExecutionOutput::Svg(svg) => {
+                assert!(svg.contains("<svg"));
+                assert!(!svg.contains("Lorem"));
+            }
+            other => panic!("unexpected output: {other:?}"),
+        }
+    }
 }
