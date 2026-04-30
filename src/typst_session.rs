@@ -1,3 +1,4 @@
+use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -8,10 +9,10 @@ use parking_lot::Mutex;
 use typst::diag::{At, FileError, FileResult, SourceDiagnostic};
 use typst::engine::{Engine, Route, Sink, Traced};
 use typst::foundations::{
-    Bytes, Content, Context, Datetime, Element, Scope, Scopes, Style, StyleChain, Styles, Target,
-    TargetElem, Value, ops,
+    Bytes, Content, Context, Datetime, Element, Scope, Scopes, Selector, Style, StyleChain, Styles,
+    Target, TargetElem, Value, ops,
 };
-use typst::introspection::Introspector;
+use typst::introspection::{Counter, Introspector, State};
 use typst::layout::{PageElem, PagedDocument};
 use typst::syntax::{FileId, Source, Span, VirtualPath, ast, ast::AstNode, parse_code};
 use typst::text::{Font, FontBook};
@@ -74,6 +75,7 @@ pub struct TypstSession {
     mode: Mode,
     scope: Scope,
     styles: Styles,
+    introspection_updates: Vec<Content>,
     world: Arc<SessionWorld>,
 }
 
@@ -86,6 +88,7 @@ impl TypstSession {
             mode: Mode::Svg,
             scope: Scope::new(),
             styles: Styles::new(),
+            introspection_updates: Vec::new(),
             world: Arc::new(SessionWorld::new(&root, fonts.clone_for_world())),
         };
         session.initialize_page_setup(page_setup)?;
@@ -96,10 +99,13 @@ impl TypstSession {
         let cell = parse_cell(source, self.mode)?;
         self.mode = cell.mode;
         let evaluated = self.evaluate_code(&cell.body)?;
+        let content = self.with_introspection_context(evaluated.content.clone());
         let output = match cell.mode {
-            Mode::Svg => self.render_svg(evaluated.content)?,
-            Mode::Html => self.render_html(evaluated.content)?,
+            Mode::Svg => self.render_svg(content)?,
+            Mode::Html => self.render_html(content)?,
         };
+        self.introspection_updates
+            .extend(collect_introspection_updates(&evaluated.content));
         Ok(ExecutionResult {
             output,
             warnings: evaluated.warnings,
@@ -205,6 +211,19 @@ impl TypstSession {
         Ok(ExecutionOutput::Html(
             typst_html::html(&document).map_err(format_diagnostics)?,
         ))
+    }
+
+    fn with_introspection_context(&self, content: Content) -> Content {
+        if self.introspection_updates.is_empty() {
+            return content;
+        }
+
+        Content::sequence(
+            self.introspection_updates
+                .iter()
+                .cloned()
+                .chain(std::iter::once(content)),
+        )
     }
 }
 
@@ -363,6 +382,18 @@ fn is_transient_page_property(property: &typst::foundations::Property) -> bool {
         .into_iter()
         .filter_map(|field| page.field_id(field))
         .any(|id| property.is(page, id))
+}
+
+fn collect_introspection_updates(content: &Content) -> Vec<Content> {
+    let selector = Selector::Or(eco_vec![State::select_any(), Counter::select_any()]);
+    let mut updates = Vec::new();
+    let _ = content.traverse(&mut |element| {
+        if selector.matches(&element, None) {
+            updates.push(element);
+        }
+        ControlFlow::<()>::Continue(())
+    });
+    updates
 }
 
 fn format_diagnostics(diagnostics: EcoVec<SourceDiagnostic>) -> anyhow::Error {
@@ -781,6 +812,22 @@ mod tests {
     }
 
     #[test]
+    fn state_updates_persist_between_cells_without_visible_content() {
+        let mut session = TypstSession::default();
+        let first = html_output(
+            session
+                .execute("// jupytypst: mode=html\nlet s = state(\"test\", \"init\")\ns.update(\"upd\")\ncontext s.get()")
+                .unwrap(),
+        );
+        let second = html_output(session.execute("context s.get()").unwrap());
+
+        assert!(first.contains("upd"));
+        assert!(second.contains("<p>upd</p>"));
+        assert!(!second.contains("<p>init</p>"));
+        assert_eq!(second.matches("upd").count(), 1);
+    }
+
+    #[test]
     fn svg_mode_wraps_multiple_pages_as_independent_svgs() {
         let mut session = TypstSession::default();
         let output = session
@@ -798,6 +845,13 @@ mod tests {
     fn svg_output(result: ExecutionResult) -> String {
         match result.output {
             ExecutionOutput::Svg(svg) => svg,
+            other => panic!("unexpected output: {other:?}"),
+        }
+    }
+
+    fn html_output(result: ExecutionResult) -> String {
+        match result.output {
+            ExecutionOutput::Html(html) => html,
             other => panic!("unexpected output: {other:?}"),
         }
     }

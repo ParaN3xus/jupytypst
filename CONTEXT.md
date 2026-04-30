@@ -28,6 +28,8 @@ interactive Typst evaluation with notebook-friendly display outputs.
 - Use lower-level Typst APIs for evaluation and rendering:
   - Keep a persistent top-level `Scope` for definitions/imports.
   - Capture top-level `Styles` from `set` and selector `show` rules.
+  - Carry forward invisible `state`/`counter` update content so Typst's
+    per-layout `Introspector` can see prior cell updates.
   - Render the current cell's evaluated `Content`, not accumulated source.
 - Tinymist DAP REPL is useful as a reference, but it does not persist console
   definitions, so this kernel owns its own session context.

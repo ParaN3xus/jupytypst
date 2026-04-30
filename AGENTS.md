@@ -32,6 +32,9 @@ This repository implements `jupytypst`, a Rust Jupyter kernel for Typst.
   top-level `Styles`, not by concatenating prior cell source.
 - Top-level `let`/imports update the persistent scope. Top-level selector
   `show` rules and `set` rules update persistent styles.
+- Persist Typst introspection state by carrying forward invisible
+  `state`/`counter` update content between cells. Do not carry forward visible
+  cell content.
 - Anonymous top-level `show: ...` rules are cell-local because they cannot be
   replayed safely as persistent style recipes; emit a user-visible warning.
 - Page setup must reset for each rendered cell. Do not persist transient page
