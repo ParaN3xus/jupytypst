@@ -22,6 +22,10 @@ use typsess::{
     ExecutionOutput, InputStatus, PageSetup, RenderMode, TypstReplSession, classify_input,
 };
 
+const JUPYTER_PROTOCOL_VERSION: &str = "5.3";
+const KERNEL_IMPLEMENTATION: &str = env!("CARGO_PKG_NAME");
+const KERNEL_IMPLEMENTATION_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub async fn run(connection_file: PathBuf, page_setup: String) -> Result<()> {
     let bytes = std::fs::read(&connection_file)
         .with_context(|| format!("failed to read {}", connection_file.display()))?;
@@ -303,9 +307,9 @@ impl KernelServer {
 fn kernel_info() -> KernelInfoReply {
     KernelInfoReply {
         status: ReplyStatus::Ok,
-        protocol_version: "5.3".to_string(),
-        implementation: "jupytypst".to_string(),
-        implementation_version: env!("CARGO_PKG_VERSION").to_string(),
+        protocol_version: JUPYTER_PROTOCOL_VERSION.to_string(),
+        implementation: KERNEL_IMPLEMENTATION.to_string(),
+        implementation_version: KERNEL_IMPLEMENTATION_VERSION.to_string(),
         language_info: LanguageInfo {
             name: "typst-code".to_string(),
             version: typst::syntax::package::PackageVersion::compiler().to_string(),
