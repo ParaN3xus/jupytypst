@@ -21,6 +21,32 @@ pub enum Mode {
     Html,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PageSetup {
+    Default,
+    None,
+    Custom(String),
+}
+
+impl PageSetup {
+    pub fn parse(value: &str) -> Result<Self> {
+        match value.trim() {
+            "default" => Ok(Self::Default),
+            "none" => Ok(Self::None),
+            "" => Err(anyhow!("page setup cannot be empty")),
+            custom => Ok(Self::Custom(custom.to_string())),
+        }
+    }
+
+    fn code(&self) -> Option<&str> {
+        match self {
+            Self::Default => Some("set page(width: auto, height: auto, margin: 16pt)"),
+            Self::None => None,
+            Self::Custom(code) => Some(code.as_str()),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct ParsedCell {
     pub mode: Mode,
@@ -37,17 +63,19 @@ pub enum ExecutionOutput {
 #[derive(Debug)]
 pub struct TypstSession {
     mode: Mode,
+    page_setup: PageSetup,
     context_code: Vec<String>,
     root: PathBuf,
     fonts: Fonts,
 }
 
 impl TypstSession {
-    pub fn new() -> Self {
+    pub fn new(page_setup: PageSetup) -> Self {
         let mut searcher = Fonts::searcher();
         let fonts = searcher.search();
         Self {
             mode: Mode::Eval,
+            page_setup,
             context_code: Vec::new(),
             root: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             fonts,
@@ -107,6 +135,11 @@ impl TypstSession {
 
     fn render_source(&self, markup: &str) -> String {
         let mut source = String::new();
+        if let Some(page_setup) = self.page_setup.code() {
+            source.push('#');
+            source.push_str(page_setup);
+            source.push('\n');
+        }
         for line in &self.context_code {
             source.push('#');
             source.push_str(line);
@@ -119,7 +152,7 @@ impl TypstSession {
 
 impl Default for TypstSession {
     fn default() -> Self {
-        Self::new()
+        Self::new(PageSetup::Default)
     }
 }
 
@@ -321,7 +354,7 @@ mod tests {
 
     #[test]
     fn eval_mode_preserves_definitions() {
-        let mut session = TypstSession::new();
+        let mut session = TypstSession::default();
         let first = session.execute("let f(a, b) = a + b").unwrap();
         assert!(matches!(first, ExecutionOutput::PlainText(_)));
 
@@ -334,7 +367,7 @@ mod tests {
 
     #[test]
     fn svg_mode_does_not_rerender_previous_visible_content() {
-        let mut session = TypstSession::new();
+        let mut session = TypstSession::default();
         session
             .execute("// jupytypst: mode=svg\n#lorem(20)")
             .unwrap();
@@ -348,5 +381,26 @@ mod tests {
             }
             other => panic!("unexpected output: {other:?}"),
         }
+    }
+
+    #[test]
+    fn page_setup_default_is_injected() {
+        let session = TypstSession::default();
+        let source = session.render_source("= Test");
+        assert!(source.starts_with("#set page(width: auto, height: auto, margin: 16pt)"));
+    }
+
+    #[test]
+    fn page_setup_none_is_not_injected() {
+        let session = TypstSession::new(PageSetup::None);
+        let source = session.render_source("= Test");
+        assert_eq!(source, "= Test");
+    }
+
+    #[test]
+    fn page_setup_custom_is_injected() {
+        let session = TypstSession::new(PageSetup::Custom("set page(paper: \"a4\")".into()));
+        let source = session.render_source("= Test");
+        assert!(source.starts_with("#set page(paper: \"a4\")"));
     }
 }
