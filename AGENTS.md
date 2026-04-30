@@ -22,8 +22,10 @@ This repository implements `jupytypst`, a Rust Jupyter kernel for Typst.
 - Cell directives use Typst comments, for example
   `// jupytypst: mode=svg`.
 - Supported modes are `svg` and `html`; `svg` is the default.
+- Cells run in Typst code mode, not markup mode. Use `let x = 1` instead of
+  `#let x = 1`, and wrap literal content in content blocks such as `[Text]`.
 - By default, each rendered cell gets
-  `#set page(width: auto, height: auto, margin: 16pt)` before user code.
+  `set page(width: auto, height: auto, margin: 16pt)` before user code.
   `--page-setup none` disables this, and `--page-setup <Typst code>` overrides
   it.
 - Persist only top-level definition/configuration statements between cells:

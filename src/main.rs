@@ -12,7 +12,7 @@ mod kernel;
 mod typst_session;
 
 const KERNEL_NAME: &str = "jupytypst";
-const DISPLAY_NAME: &str = "Typst (jupytypst)";
+const DISPLAY_NAME: &str = "Typst (Code Mode)";
 
 #[derive(Debug, Parser)]
 #[command(author, version, about)]
@@ -34,7 +34,7 @@ struct StartArgs {
     /// Path to the Jupyter connection file.
     #[arg(short = 'f', long = "connection-file")]
     connection_file: PathBuf,
-    /// Page setup injected before each rendered cell. Omit for `#set page(width: auto, height: auto, margin: 16pt)`, use `none` to disable, or pass Typst code.
+    /// Page setup injected before each rendered cell. Omit for `set page(width: auto, height: auto, margin: 16pt)`, use `none` to disable, or pass Typst code.
     #[arg(long)]
     page_setup: Option<String>,
 }
@@ -118,7 +118,7 @@ fn write_kernel_json(spec_dir: &Path, binary: &Path) -> Result<()> {
             "{connection_file}".to_string(),
         ],
         display_name: DISPLAY_NAME.to_string(),
-        language: "typst".to_string(),
+        language: "typst-code".to_string(),
         metadata: Some(HashMap::new()),
         interrupt_mode: Some("message".to_string()),
         env: Some(HashMap::new()),

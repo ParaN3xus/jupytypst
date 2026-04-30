@@ -12,7 +12,10 @@ interactive Typst evaluation with notebook-friendly display outputs.
 - Support two execution modes:
   - `svg`: render Typst markup as notebook HTML containing per-page SVG.
   - `html`: render Typst markup as `text/html`.
-- Default page setup is `#set page(width: auto, height: auto, margin: 16pt)`.
+- Execute cells as Typst code mode by wrapping generated source in a top-level
+  `#{ ... }` block. Users write `let`, `set`, and function calls directly
+  without a leading `#`.
+- Default page setup is `set page(width: auto, height: auto, margin: 16pt)`.
   CLI users can pass `--page-setup none` or custom Typst page setup code.
 
 ## Design Notes

@@ -90,16 +90,16 @@ impl TypstSession {
         Ok(output)
     }
 
-    fn render_svg(&self, markup: &str) -> Result<ExecutionOutput> {
-        let source = self.render_source(markup);
+    fn render_svg(&self, code: &str) -> Result<ExecutionOutput> {
+        let source = self.render_source(code);
         let world = SessionWorld::new(&self.root, &source, self.fonts.clone_for_world());
         let warned = typst::compile::<PagedDocument>(&world);
         let document = warned.output.map_err(format_diagnostics)?;
         Ok(ExecutionOutput::Svg(svg_pages_html(&document)))
     }
 
-    fn render_html(&self, markup: &str) -> Result<ExecutionOutput> {
-        let source = self.render_source(markup);
+    fn render_html(&self, code: &str) -> Result<ExecutionOutput> {
+        let source = self.render_source(code);
         let world = SessionWorld::new(&self.root, &source, self.fonts.clone_for_world());
         let warned = typst::compile::<typst_html::HtmlDocument>(&world);
         let document = warned.output.map_err(format_diagnostics)?;
@@ -108,19 +108,18 @@ impl TypstSession {
         ))
     }
 
-    fn render_source(&self, markup: &str) -> String {
-        let mut source = String::new();
+    fn render_source(&self, code: &str) -> String {
+        let mut source = String::from("#{\n");
         if let Some(page_setup) = self.page_setup.code() {
-            source.push('#');
-            source.push_str(page_setup);
+            source.push_str(normalize_code_statement(page_setup));
             source.push('\n');
         }
         for line in &self.context_code {
-            source.push('#');
             source.push_str(line);
             source.push('\n');
         }
-        source.push_str(markup);
+        source.push_str(code);
+        source.push_str("\n}\n");
         source
     }
 }
@@ -176,11 +175,15 @@ fn extract_context_code(source: &str, mode: Mode) -> Vec<String> {
         .filter_map(|line| {
             let trimmed = line.trim();
             let code = match mode {
-                Mode::Svg | Mode::Html => trimmed.strip_prefix('#')?.trim_start(),
+                Mode::Svg | Mode::Html => normalize_code_statement(trimmed),
             };
             is_context_statement(code).then(|| code.to_string())
         })
         .collect()
+}
+
+fn normalize_code_statement(code: &str) -> &str {
+    code.trim_start_matches('#').trim_start()
 }
 
 fn is_context_statement(code: &str) -> bool {
@@ -335,9 +338,9 @@ mod tests {
 
     #[test]
     fn parses_comment_mode_directive() {
-        let cell = parse_cell("// jupytypst: mode=svg\n= Test", Mode::Svg).unwrap();
+        let cell = parse_cell("// jupytypst: mode=svg\n[Test]", Mode::Svg).unwrap();
         assert_eq!(cell.mode, Mode::Svg);
-        assert_eq!(cell.body, "= Test");
+        assert_eq!(cell.body, "[Test]");
     }
 
     #[test]
@@ -347,14 +350,14 @@ mod tests {
     }
 
     #[test]
-    fn extracts_markup_context_without_visible_content() {
-        let context = extract_context_code("#let x = 1\n#lorem(100)\n= Test", Mode::Svg);
+    fn extracts_code_context_without_visible_content() {
+        let context = extract_context_code("let x = 1\nlorem(100)\n[Test]", Mode::Svg);
         assert_eq!(context, vec!["let x = 1"]);
     }
 
     #[test]
     fn default_mode_is_svg() {
-        let cell = parse_cell("= Test", Mode::Svg).unwrap();
+        let cell = parse_cell("[Test]", Mode::Svg).unwrap();
         assert_eq!(cell.mode, Mode::Svg);
     }
 
@@ -362,11 +365,11 @@ mod tests {
     fn svg_mode_does_not_rerender_previous_visible_content() {
         let mut session = TypstSession::default();
         session
-            .execute("// jupytypst: mode=svg\n#lorem(20)")
+            .execute("// jupytypst: mode=svg\nlorem(20)")
             .unwrap();
         assert!(session.context_code.is_empty());
 
-        let output = session.execute("// jupytypst: mode=svg\n= Test").unwrap();
+        let output = session.execute("// jupytypst: mode=svg\n[Test]").unwrap();
         match output {
             ExecutionOutput::Svg(svg) => {
                 assert!(svg.contains("<svg"));
@@ -377,31 +380,42 @@ mod tests {
     }
 
     #[test]
+    fn code_context_persists_without_hash_prefix() {
+        let mut session = TypstSession::default();
+        session.execute("let f(a, b) = a + b").unwrap();
+        let output = session.execute("f(1, 2)").unwrap();
+        match output {
+            ExecutionOutput::Svg(html) => assert!(html.contains("<svg")),
+            other => panic!("unexpected output: {other:?}"),
+        }
+    }
+
+    #[test]
     fn page_setup_default_is_injected() {
         let session = TypstSession::default();
-        let source = session.render_source("= Test");
-        assert!(source.starts_with("#set page(width: auto, height: auto, margin: 16pt)"));
+        let source = session.render_source("[Test]");
+        assert!(source.starts_with("#{\nset page(width: auto, height: auto, margin: 16pt)"));
     }
 
     #[test]
     fn page_setup_none_is_not_injected() {
         let session = TypstSession::new(PageSetup::None);
-        let source = session.render_source("= Test");
-        assert_eq!(source, "= Test");
+        let source = session.render_source("[Test]");
+        assert_eq!(source, "#{\n[Test]\n}\n");
     }
 
     #[test]
     fn page_setup_custom_is_injected() {
-        let session = TypstSession::new(PageSetup::Custom("set page(paper: \"a4\")".into()));
-        let source = session.render_source("= Test");
-        assert!(source.starts_with("#set page(paper: \"a4\")"));
+        let session = TypstSession::new(PageSetup::Custom("#set page(paper: \"a4\")".into()));
+        let source = session.render_source("[Test]");
+        assert!(source.starts_with("#{\nset page(paper: \"a4\")"));
     }
 
     #[test]
     fn svg_mode_wraps_multiple_pages_as_independent_svgs() {
         let mut session = TypstSession::default();
         let output = session
-            .execute("// jupytypst: mode=svg\nx\n\n#pagebreak()\n\nx")
+            .execute("// jupytypst: mode=svg\n[x]\n\npagebreak()\n\n[x]")
             .unwrap();
         match output {
             ExecutionOutput::Svg(html) => {
