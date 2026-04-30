@@ -1,15 +1,26 @@
 # Repository Instructions
 
-This repository implements `jupytypst`, a Rust Jupyter kernel for Typst.
+This workspace implements `jupytypst`, a Rust Jupyter kernel for Typst, plus a
+reusable `typst-repl` library crate for stateful Typst code-mode execution.
 
 ## Workflow
 
 - Keep commits small and use conventional commit prefixes such as `feat:`,
   `fix:`, `docs:`, `test:`, and `chore:`.
-- Run `cargo fmt --check`, `cargo clippy -- -D warnings`, and `cargo test`
-  before committing Rust code changes.
+- Run `cargo fmt --check`, `cargo clippy --workspace -- -D warnings`, and
+  `cargo test --workspace` before committing Rust code changes.
 - Do not commit `local/`, `.venv/`, or `target/`.
-- Prefer small modules over large files when adding kernel, Typst, or CLI logic.
+- Prefer small modules over large files when adding kernel, Typst, REPL, or CLI
+  logic.
+
+## Workspace Layout
+
+- `crates/typst-repl` owns Typst evaluation/rendering state and exposes the
+  library API used by hosts.
+- `crates/jupytypst` owns the Jupyter protocol server, kernelspec installer,
+  notebook cell directives, and terminal REPL binary.
+- Keep all third-party dependency versions in the root `[workspace.dependencies]`;
+  member crates should use `.workspace = true`.
 
 ## References
 
@@ -25,6 +36,7 @@ This repository implements `jupytypst`, a Rust Jupyter kernel for Typst.
 - Cell directives use Typst comments, for example
   `// jupytypst: mode=svg`.
 - Supported modes are `svg` and `html`; `svg` is the default.
+- Directive parsing belongs in `crates/jupytypst`, not in `typst-repl`.
 - Cells run in Typst code mode, not markup mode. Use `let x = 1` instead of
   `#let x = 1`, and wrap literal content in content blocks such as `[Text]`.
 - By default, the session initializes its persistent styles with
@@ -43,3 +55,10 @@ This repository implements `jupytypst`, a Rust Jupyter kernel for Typst.
 - Page setup must reset for each rendered cell. Do not persist transient page
   sizing fields: `page.paper`, `page.width`, and `page.height`. Other page
   fields, such as `fill`, may persist.
+
+## REPL Behavior
+
+- `jupytypst repl` starts a terminal REPL backed by `typst-repl`.
+- The terminal REPL does not parse `// jupytypst:` directives. Its render mode
+  is chosen once at startup with `--mode`, defaulting to `html`.
+- The REPL supports `.exit`, `.quit`, `.clear`, `.run`, and `.help`.
