@@ -1,6 +1,10 @@
+use codespan_reporting::diagnostic::{Diagnostic, Label};
+use codespan_reporting::files::SimpleFile;
+use codespan_reporting::term::termcolor::NoColor;
+use codespan_reporting::term::{self, Config};
 use ecow::EcoVec;
 use typsess::ExecutionOutput;
-use typst::diag::SourceDiagnostic;
+use typst::diag::{Severity, SourceDiagnostic};
 
 pub fn execution_output_to_html(
     output: ExecutionOutput,
@@ -20,11 +24,23 @@ pub fn format_diagnostics(diagnostics: EcoVec<SourceDiagnostic>) -> String {
 }
 
 pub fn format_diagnostics_rich(diagnostics: EcoVec<SourceDiagnostic>, source: &str) -> String {
-    diagnostics
-        .into_iter()
-        .map(|diagnostic| format_diagnostic_rich(&diagnostic, source))
-        .collect::<Vec<_>>()
-        .join("\n")
+    let file = SimpleFile::new("<stdin>", source);
+    let config = Config {
+        tab_width: 2,
+        ..Default::default()
+    };
+    let mut output = Vec::new();
+    {
+        let mut writer = NoColor::new(&mut output);
+        for diagnostic in diagnostics {
+            let diag = to_codespan_diagnostic(diagnostic);
+            if term::emit(&mut writer, &config, &file, &diag).is_err() {
+                break;
+            }
+        }
+    }
+
+    String::from_utf8_lossy(&output).trim_end().to_string()
 }
 
 fn svg_pages_html(document: &typst::layout::PagedDocument) -> String {
@@ -60,78 +76,26 @@ fn svg_pages_html(document: &typst::layout::PagedDocument) -> String {
     )
 }
 
-fn format_diagnostic_rich(diagnostic: &SourceDiagnostic, source: &str) -> String {
-    let severity = format!("{:?}", diagnostic.severity).to_lowercase();
-    let Some(range) = display_range(diagnostic, source) else {
-        return format!("{severity}: {}", diagnostic.message);
-    };
-    let (line_index, column) = line_column(source, range.start);
-    let line = source.lines().nth(line_index).unwrap_or_default();
-    let line_number = line_index + 1;
-    let start = range.start.min(source.len());
-    let line_end = start + source[start..].find('\n').unwrap_or(source.len() - start);
-    let end = range.end.min(source.len()).min(line_end).max(start);
-    let caret_width = usize::max(1, source[start..end].chars().count());
-    let gutter = line_number.to_string();
-    let caret_padding = " ".repeat(column);
-    let carets = "^".repeat(caret_width);
-    let marker_indent = " ".repeat(gutter.len() + 1);
+fn to_codespan_diagnostic(diagnostic: SourceDiagnostic) -> Diagnostic<()> {
+    let labels = diagnostic
+        .span
+        .range()
+        .map(|range| Label::primary((), range))
+        .into_iter()
+        .collect();
+    let notes = diagnostic
+        .hints
+        .iter()
+        .map(|hint| format!("hint: {hint}"))
+        .collect();
 
-    format!(
-        "{severity}: {}\n{marker_indent}┌─ <stdin>:{line_number}:{}\n{marker_indent}│\n{line_number} │ {line}\n{marker_indent}│ {caret_padding}{carets}",
-        diagnostic.message,
-        column + 1,
-    )
-}
-
-fn display_range(diagnostic: &SourceDiagnostic, source: &str) -> Option<std::ops::Range<usize>> {
-    diagnostic_message_unknown_variable(&diagnostic.message)
-        .and_then(|name| find_identifier(source, name))
-        .or_else(|| diagnostic.span.range())
-}
-
-fn diagnostic_message_unknown_variable(message: &str) -> Option<&str> {
-    message.strip_prefix("unknown variable: ").map(str::trim)
-}
-
-fn find_identifier(source: &str, name: &str) -> Option<std::ops::Range<usize>> {
-    let mut matches = source.match_indices(name).filter_map(|(start, matched)| {
-        let end = start + matched.len();
-        is_identifier_boundary(source, start, end).then_some(start..end)
-    });
-    let first = matches.next()?;
-    if matches.next().is_some() {
-        return None;
+    match diagnostic.severity {
+        Severity::Error => Diagnostic::error(),
+        Severity::Warning => Diagnostic::warning(),
     }
-    Some(first)
-}
-
-fn is_identifier_boundary(source: &str, start: usize, end: usize) -> bool {
-    let before = source[..start].chars().next_back();
-    let after = source[end..].chars().next();
-    !before.is_some_and(is_identifier_char) && !after.is_some_and(is_identifier_char)
-}
-
-fn is_identifier_char(ch: char) -> bool {
-    ch == '_' || ch == '-' || ch.is_alphanumeric()
-}
-
-fn line_column(source: &str, byte_index: usize) -> (usize, usize) {
-    let mut line = 0;
-    let mut line_start = 0;
-    for (index, ch) in source.char_indices() {
-        if index >= byte_index {
-            break;
-        }
-        if ch == '\n' {
-            line += 1;
-            line_start = index + ch.len_utf8();
-        }
-    }
-    let column = source[line_start..byte_index.min(source.len())]
-        .chars()
-        .count();
-    (line, column)
+    .with_message(diagnostic.message.to_string())
+    .with_notes(notes)
+    .with_labels(labels)
 }
 
 #[cfg(test)]
@@ -157,20 +121,5 @@ mod tests {
         assert!(formatted.contains("1 │ tests"));
         assert!(formatted.contains("^^^^^"));
         assert!(formatted.contains("  ┌─ <stdin>:1:1"));
-    }
-
-    #[test]
-    fn formats_unknown_variable_at_token_in_parenthesized_expression() {
-        let diagnostics = eco_vec![SourceDiagnostic::error(
-            Span::from_range(
-                typst::syntax::FileId::new(None, VirtualPath::new("/main.typ")),
-                0..9,
-            ),
-            "unknown variable: fdsf",
-        )];
-
-        let formatted = format_diagnostics_rich(diagnostics, "(\nfdsf\n)\n");
-        assert!(formatted.contains("2 │ fdsf"));
-        assert!(formatted.contains("  │ ^^^^"));
     }
 }

@@ -9,6 +9,7 @@ edition = "2024"
 [workspace.dependencies]
 anyhow = "1.0.102"
 clap = { version = "4.6.1", features = ["derive"] }
+codespan-reporting = "0.11.1"
 comemo = "0.5.1"
 ecow = "0.2.6"
 fontdb = { version = "0.23", default-features = false, features = ["fs", "memmap"] }
