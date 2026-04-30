@@ -20,7 +20,7 @@ use typst::foundations::{
 };
 use typst::introspection::Introspector;
 use typst::layout::PagedDocument;
-use typst::syntax::{Span, VirtualPath, ast, ast::AstNode, parse_code};
+use typst::syntax::{Source, Span, VirtualPath, ast, ast::AstNode};
 use typst::utils::LazyHash;
 use typst_eval::{Eval, Vm};
 
@@ -30,6 +30,9 @@ mod persist;
 pub use input::{InputStatus, classify_input};
 
 use persist::{collect_introspection_updates, filter_persistent_styles};
+
+const CODE_WRAPPER_PREFIX: &str = "#{\n";
+const CODE_WRAPPER_SUFFIX: &str = "\n}";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenderMode {
@@ -174,19 +177,27 @@ impl TypstReplSession {
                 source_error(format!("failed to update Typst main source: {error}"))
             })?;
 
-        let span = Span::from_range(self.world.main(), 0..source.len());
-        let mut root = parse_code(source);
-        root.synthesize(span);
+        let wrapped_source = Source::new(
+            self.world.main(),
+            format!("{CODE_WRAPPER_PREFIX}{source}{CODE_WRAPPER_SUFFIX}"),
+        );
+        let root = wrapped_source.root();
 
         let errors = root.errors();
         if !errors.is_empty() {
-            return Err(errors.into_iter().map(Into::into).collect());
+            return Err(remap_wrapped_diagnostics(
+                errors.into_iter().map(Into::into).collect(),
+                &wrapped_source,
+                source.len(),
+            ));
         }
+
+        let code = wrapped_code_body(root)?;
 
         let mut sink = Sink::new();
         let mut captured_styles = Styles::new();
         let world = self.world.html_task();
-        let (value, new_scope, sink_warnings) = {
+        let evaluated = {
             let introspector = Introspector::default();
             let traced = Traced::default();
             let engine = Engine {
@@ -201,25 +212,39 @@ impl TypstReplSession {
             let mut scopes = Scopes::new(Some(world.library()));
             scopes.top = self.scope.clone();
             let mut vm = Vm::new(engine, context.track(), scopes, root.span());
-            let value = eval_code_capture(
+            let value = match eval_code_capture(
                 &mut vm,
-                &mut root.cast::<ast::Code>().unwrap().exprs(),
+                &mut code.exprs(),
                 style_capture,
                 &mut captured_styles,
-            )?;
+            ) {
+                Ok(value) => value,
+                Err(diagnostics) => {
+                    return Err(remap_wrapped_diagnostics(
+                        diagnostics,
+                        &wrapped_source,
+                        source.len(),
+                    ));
+                }
+            };
             if let Some(flow) = vm.flow {
-                return Err(eco_vec![flow.forbidden()]);
+                return Err(remap_wrapped_diagnostics(
+                    eco_vec![flow.forbidden()],
+                    &wrapped_source,
+                    source.len(),
+                ));
             }
             let new_scope = vm.scopes.top.clone();
             drop(vm);
             (value, new_scope, sink.warnings())
         };
+        let (value, new_scope, sink_warnings) = evaluated;
 
         Ok(EvaluatedSource {
             value,
             scope: new_scope,
             captured_styles,
-            warnings: sink_warnings,
+            warnings: remap_wrapped_diagnostics(sink_warnings, &wrapped_source, source.len()),
         })
     }
 
@@ -307,7 +332,9 @@ fn eval_code_capture<'a>(
                 let tail = eval_code_capture(vm, exprs, style_capture, captured_styles)?.display();
                 Value::Content(tail.styled_with_recipe(&mut vm.engine, vm.context, recipe)?)
             }
-            ast::Expr::CodeBlock(block) => block.eval(vm)?,
+            ast::Expr::CodeBlock(block) => {
+                eval_code_block_capture(vm, block, style_capture, captured_styles)?
+            }
             _ => {
                 let span = expr.span();
                 let value = expr.eval(vm)?;
@@ -332,6 +359,64 @@ fn eval_code_capture<'a>(
     }
 
     Ok(output)
+}
+
+fn eval_code_block_capture(
+    vm: &mut Vm,
+    block: ast::CodeBlock,
+    style_capture: StyleCapture,
+    captured_styles: &mut Styles,
+) -> typst::diag::SourceResult<Value> {
+    vm.scopes.enter();
+    let output = eval_code_capture(
+        vm,
+        &mut block.body().exprs(),
+        style_capture,
+        captured_styles,
+    );
+    vm.scopes.exit();
+    output
+}
+
+fn wrapped_code_body(root: &typst::syntax::SyntaxNode) -> typst::diag::SourceResult<ast::Code<'_>> {
+    let markup = root
+        .cast::<ast::Markup>()
+        .ok_or_else(|| source_error("failed to parse wrapped Typst code"))?;
+    markup
+        .exprs()
+        .find_map(|expr| match expr {
+            ast::Expr::CodeBlock(block) => Some(block.body()),
+            _ => None,
+        })
+        .ok_or_else(|| source_error("failed to find wrapped Typst code body"))
+}
+
+fn remap_wrapped_diagnostics(
+    mut diagnostics: EcoVec<SourceDiagnostic>,
+    source: &Source,
+    source_len: usize,
+) -> EcoVec<SourceDiagnostic> {
+    for diagnostic in diagnostics.make_mut() {
+        diagnostic.span = remap_wrapped_span(diagnostic.span, source, source_len);
+        for trace in diagnostic.trace.make_mut() {
+            trace.span = remap_wrapped_span(trace.span, source, source_len);
+        }
+    }
+    diagnostics
+}
+
+fn remap_wrapped_span(span: Span, source: &Source, source_len: usize) -> Span {
+    let Some(range) = source.range(span) else {
+        return span;
+    };
+
+    let offset = CODE_WRAPPER_PREFIX.len();
+    let end = offset + source_len;
+    if range.start < offset || range.end > end {
+        return span;
+    }
+
+    Span::from_range(source.id(), range.start - offset..range.end - offset)
 }
 
 trait LayoutTarget: Sized {

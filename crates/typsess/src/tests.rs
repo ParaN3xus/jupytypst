@@ -234,6 +234,22 @@ fn world_root_controls_relative_imports() {
     assert!(html.contains("Imported"));
 }
 
+#[test]
+fn code_block_errors_keep_inner_expression_span() {
+    let mut session = html_session();
+    let errors = session
+        .execute("{\nstr(1 + 1)\npage.fill\n}")
+        .expect_err("contextual page field access should fail outside context");
+    let range = errors
+        .first()
+        .and_then(|diagnostic| diagnostic.span.range())
+        .expect("diagnostic should have a source range");
+
+    let source = "{\nstr(1 + 1)\npage.fill\n}";
+    assert_eq!(&source[range.clone()], "fill");
+    assert_eq!(source[..range.start].lines().count(), 3);
+}
+
 fn svg_session() -> TypstReplSession {
     TypstReplSession::new(RenderMode::Svg, PageSetup::Default).unwrap()
 }
