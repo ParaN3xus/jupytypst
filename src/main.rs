@@ -7,6 +7,8 @@ use clap::{Args, Parser, Subcommand};
 use jupyter_protocol::JupyterKernelspec;
 use tempfile::TempDir;
 
+mod kernel;
+
 const KERNEL_NAME: &str = "jupytypst";
 const DISPLAY_NAME: &str = "Typst (jupytypst)";
 
@@ -62,8 +64,7 @@ async fn main() -> Result<()> {
 }
 
 async fn start_kernel(args: StartArgs) -> Result<()> {
-    let _connection_file = args.connection_file;
-    bail!("kernel protocol loop is not implemented yet")
+    kernel::run(args.connection_file).await
 }
 
 fn install_kernelspec(args: InstallArgs) -> Result<()> {
