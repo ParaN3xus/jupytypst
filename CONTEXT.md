@@ -1,7 +1,7 @@
 # Project Context
 
 `jupytypst` is a Typst Jupyter kernel written in Rust. The workspace also
-contains `typst-repl`, a reusable library crate for stateful Typst code-mode
+contains `typsess`, a reusable library crate for stateful Typst code-mode
 evaluation and rendering.
 
 ## Goals
@@ -16,7 +16,7 @@ evaluation and rendering.
   - `svg`: render Typst markup as notebook HTML containing per-page SVG.
   - `html`: render Typst markup as `text/html`.
 - Notebook cells may switch render mode with `// jupytypst: mode=svg|html`.
-  This parsing is a `jupytypst` host concern; `typst-repl` receives plain Typst
+  This parsing is a `jupytypst` host concern; `typsess` receives plain Typst
   code and a render mode.
 - Execute cells as Typst code mode through `typst_eval::Vm`. Users write
   `let`, `set`, and function calls directly without a leading `#`.
@@ -33,10 +33,13 @@ evaluation and rendering.
 - Use `zeromq` for the kernel sockets.
 - Keep workspace dependency versions in the root `Cargo.toml`; member crates use
   `.workspace = true` for shared dependencies.
-- `crates/typst-repl` owns the persistent Typst session, page setup, input
+- `crates/typsess` owns the persistent Typst session, page setup, input
   completeness classification, and SVG/HTML rendering.
 - `crates/jupytypst` owns Jupyter protocol handling, kernelspec installation,
   notebook directives, and the user-facing terminal REPL.
+- `typsess` returns structured Typst outputs (`PagedDocument` or
+  `HtmlDocument`) plus `SourceDiagnostic`s. `jupytypst` converts those outputs
+  into notebook/terminal HTML and user-facing error strings.
 - Use `tinymist-world` for Typst's `World` implementation so package imports,
   filesystem resolution, font discovery, and package cache behavior match
   Tinymist's system environment.

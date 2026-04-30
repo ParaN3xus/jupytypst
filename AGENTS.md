@@ -1,7 +1,7 @@
 # Repository Instructions
 
 This workspace implements `jupytypst`, a Rust Jupyter kernel for Typst, plus a
-reusable `typst-repl` library crate for stateful Typst code-mode execution.
+reusable `typsess` library crate for stateful Typst code-mode execution.
 
 ## Workflow
 
@@ -15,7 +15,7 @@ reusable `typst-repl` library crate for stateful Typst code-mode execution.
 
 ## Workspace Layout
 
-- `crates/typst-repl` owns Typst evaluation/rendering state and exposes the
+- `crates/typsess` owns Typst evaluation/rendering state and exposes the
   library API used by hosts.
 - `crates/jupytypst` owns the Jupyter protocol server, kernelspec installer,
   notebook cell directives, and terminal REPL binary.
@@ -36,7 +36,10 @@ reusable `typst-repl` library crate for stateful Typst code-mode execution.
 - Cell directives use Typst comments, for example
   `// jupytypst: mode=svg`.
 - Supported modes are `svg` and `html`; `svg` is the default.
-- Directive parsing belongs in `crates/jupytypst`, not in `typst-repl`.
+- Directive parsing belongs in `crates/jupytypst`, not in `typsess`.
+- `typsess` returns structured `PagedDocument`/`HtmlDocument` outputs and Typst
+  `SourceDiagnostic`s. Host-facing HTML wrapping and diagnostic formatting
+  belong in `crates/jupytypst`.
 - Cells run in Typst code mode, not markup mode. Use `let x = 1` instead of
   `#let x = 1`, and wrap literal content in content blocks such as `[Text]`.
 - By default, the session initializes its persistent styles with
@@ -58,7 +61,7 @@ reusable `typst-repl` library crate for stateful Typst code-mode execution.
 
 ## REPL Behavior
 
-- `jupytypst repl` starts a terminal REPL backed by `typst-repl`.
+- `jupytypst repl` starts a terminal REPL backed by `typsess`.
 - The terminal REPL does not parse `// jupytypst:` directives. Its render mode
   is chosen once at startup with `--mode`, defaulting to `html`.
 - The REPL supports `.exit`, `.quit`, `.clear`, `.run`, and `.help`.
