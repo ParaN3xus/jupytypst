@@ -1,0 +1,64 @@
+---
+source: crates/jupytypst/tests/kernel_snapshots.rs
+expression: "run_case(KernelCase\n{\n    init: KernelInit::new(RenderMode::Html, SourceMode::Code), fixtures:\n    vec![], requests:\n    vec![Request::Execute\n    {\n        input:\n        r#\"let s = state(\"test\", \"init\")\n                s.update(\"upd\")\n                context s.get()\"#\n    }, Request::Execute { input: \"context s.get()\" },],\n})"
+---
+init:
+  default_format: Html
+  source_mode: Code
+  page_setup: |
+  ```typc
+  set page(width: auto, height: auto, margin: 16pt)
+  ```
+  inputs: []
+
+--- request 1 ---
+kind: execute
+input: |
+  ```typ
+  let s = state("test", "init")
+                  s.update("upd")
+                  context s.get()
+  ```
+effective_format: Html
+status: ok
+warnings: []
+output_kind: html
+output: |
+  ```html
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+    </head>
+    <body>
+      <p>upd</p>
+    </body>
+  </html>
+
+  ```
+
+--- request 2 ---
+kind: execute
+input: |
+  ```typ
+  context s.get()
+  ```
+effective_format: Html
+status: ok
+warnings: []
+output_kind: html
+output: |
+  ```html
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+    </head>
+    <body>
+      <p>upd</p>
+    </body>
+  </html>
+
+  ```

@@ -42,28 +42,3 @@ fn parse_directive(rest: &str, field: &str) -> Result<RenderMode> {
         other => Err(anyhow!("unsupported jupytypst format `{other}`")),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_comment_format_directive() {
-        let cell = parse_cell("// jupytypst: format=svg\n[Test]", RenderMode::Html).unwrap();
-        assert_eq!(cell.mode, RenderMode::Svg);
-        assert_eq!(cell.body, "[Test]");
-    }
-
-    #[test]
-    fn rejects_unsupported_format() {
-        let error = parse_cell("// jupytypst: format=pdf\n1 + 2", RenderMode::Svg).unwrap_err();
-        assert!(error.to_string().contains("unsupported jupytypst format"));
-    }
-
-    #[test]
-    fn keeps_default_mode_without_directive() {
-        let cell = parse_cell("[Test]", RenderMode::Svg).unwrap();
-        assert_eq!(cell.mode, RenderMode::Svg);
-        assert_eq!(cell.body, "[Test]");
-    }
-}

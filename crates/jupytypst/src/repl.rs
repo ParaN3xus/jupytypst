@@ -148,7 +148,7 @@ fn execute_buffer(session: &mut TypstReplSession, buffer: &str, full_html: bool)
     println!("{output}");
 }
 
-fn execution_output_to_string(
+pub(crate) fn execution_output_to_string(
     output: ExecutionOutput,
     full_html: bool,
 ) -> Result<String, ecow::EcoVec<typst::diag::SourceDiagnostic>> {
@@ -170,7 +170,7 @@ fn execution_output_to_string(
     }
 }
 
-fn body_inner_html(html: &str) -> Option<String> {
+pub(crate) fn body_inner_html(html: &str) -> Option<String> {
     let document = Html::parse_document(html);
     let selector = Selector::parse("body").ok()?;
     document
@@ -240,16 +240,5 @@ impl Prompt for TypstPrompt {
             "({prefix}reverse-search: {}) ",
             history_search.term
         ))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn extracts_body_inner_html() {
-        let html = "<!DOCTYPE html><html><head></head><body><p>test</p></body></html>";
-        assert_eq!(body_inner_html(html).unwrap(), "<p>test</p>");
     }
 }

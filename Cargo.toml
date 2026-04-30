@@ -14,6 +14,7 @@ comemo = "0.5.1"
 ecow = "0.2.6"
 fontdb = { version = "0.23", default-features = false, features = ["fs", "memmap"] }
 jupyter-protocol = "2.0.0"
+insta = { version = "1.43.2", features = ["yaml"] }
 reedline = "0.47.0"
 runtimelib = { version = "2.0.0", features = ["tokio-runtime"] }
 scraper = "0.26.0"

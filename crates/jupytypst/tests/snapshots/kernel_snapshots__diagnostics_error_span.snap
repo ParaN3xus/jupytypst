@@ -1,0 +1,35 @@
+---
+source: crates/jupytypst/tests/kernel_snapshots.rs
+expression: "run_case(KernelCase\n{\n    init: KernelInit::new(RenderMode::Html, SourceMode::Code), fixtures:\n    vec![], requests:\n    vec![Request::Execute { input: r#\"{\n    str(1 + 1)\n    page.fill\n}\"# }],\n})"
+---
+init:
+  default_format: Html
+  source_mode: Code
+  page_setup: |
+  ```typc
+  set page(width: auto, height: auto, margin: 16pt)
+  ```
+  inputs: []
+
+--- request 1 ---
+kind: execute
+input: |
+  ```typ
+  {
+      str(1 + 1)
+      page.fill
+  }
+  ```
+effective_format: Html
+status: error
+traceback: |
+  ```text
+  error: can only be used when context is known
+    ┌─ <stdin:2>:3:10
+    │
+  3 │     page.fill
+    │          ^^^^
+    │
+    = hint: try wrapping this in a `context` expression
+    = hint: the `context` expression should wrap everything that depends on this function
+  ```

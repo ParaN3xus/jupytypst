@@ -1,0 +1,60 @@
+---
+source: crates/jupytypst/tests/kernel_snapshots.rs
+expression: "run_case(KernelCase\n{\n    init: KernelInit::new(RenderMode::Html, SourceMode::Code), fixtures:\n    vec![], requests:\n    vec![Request::Execute { input: \"let f(a, b) = a + b; let x = 1\" },\n    Request::Execute { input: \"f(1, 2) + x\" },],\n})"
+---
+init:
+  default_format: Html
+  source_mode: Code
+  page_setup: |
+  ```typc
+  set page(width: auto, height: auto, margin: 16pt)
+  ```
+  inputs: []
+
+--- request 1 ---
+kind: execute
+input: |
+  ```typ
+  let f(a, b) = a + b; let x = 1
+  ```
+effective_format: Html
+status: ok
+warnings: []
+output_kind: html
+output: |
+  ```html
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+    </head>
+    <body></body>
+  </html>
+
+  ```
+
+--- request 2 ---
+kind: execute
+input: |
+  ```typ
+  f(1, 2) + x
+  ```
+effective_format: Html
+status: ok
+warnings: []
+output_kind: html
+output: |
+  ```html
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+    </head>
+    <body>
+      <p>4</p>
+    </body>
+  </html>
+
+  ```

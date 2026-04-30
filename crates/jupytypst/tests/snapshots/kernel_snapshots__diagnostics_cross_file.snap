@@ -1,0 +1,72 @@
+---
+source: crates/jupytypst/tests/kernel_snapshots.rs
+expression: "run_case(KernelCase\n{\n    init: KernelInit::new(RenderMode::Html, SourceMode::Code), fixtures:\n    vec![Fixture { path: \"defs.typ\", contents: \"#let f() = panic()\", },\n    Fixture { path: \"callbacks.typ\", contents: \"#let invoke(f) = f()\", },],\n    requests:\n    vec![Request::Execute { input: r#\"import \"defs.typ\": f\nf()\"# },\n    Request::Execute\n    {\n        input:\n        r#\"import \"callbacks.typ\": invoke\nlet f = () => panic()\ninvoke(f)\"#\n    },],\n})"
+---
+init:
+  default_format: Html
+  source_mode: Code
+  page_setup: |
+  ```typc
+  set page(width: auto, height: auto, margin: 16pt)
+  ```
+  inputs: []
+fixtures:
+  - path: defs.typ
+    contents: |
+  ```typ
+  #let f() = panic()
+  ```
+  - path: callbacks.typ
+    contents: |
+  ```typ
+  #let invoke(f) = f()
+  ```
+
+--- request 1 ---
+kind: execute
+input: |
+  ```typ
+  import "defs.typ": f
+  f()
+  ```
+effective_format: Html
+status: error
+traceback: |
+  ```text
+  error: panicked
+    ┌─ @ws/root:0.0.0/defs.typ:1:12
+    │
+  1 │ #let f() = panic()
+    │            ^^^^^^^
+    │
+    ┌─ <stdin:2>:2:1
+    │
+  2 │ f()
+    │ --- error occurred in this call of function `f`
+  ```
+
+--- request 2 ---
+kind: execute
+input: |
+  ```typ
+  import "callbacks.typ": invoke
+  let f = () => panic()
+  invoke(f)
+  ```
+effective_format: Html
+status: error
+traceback: |
+  ```text
+  error: panicked
+    ┌─ <stdin:3>:2:15
+    │
+  2 │ let f = () => panic()
+    │               ^^^^^^^
+  3 │ invoke(f)
+    │ --------- error occurred in this call of function `invoke`
+    │
+    ┌─ @ws/root:0.0.0/callbacks.typ:1:18
+    │
+  1 │ #let invoke(f) = f()
+    │                  --- error occurred in this function call
+  ```

@@ -1,0 +1,35 @@
+---
+source: crates/jupytypst/tests/kernel_snapshots.rs
+expression: "run_case(KernelCase\n{\n    init: KernelInit::new(RenderMode::Html, SourceMode::Markup), fixtures:\n    vec![], requests:\n    vec![Request::Execute\n    {\n        input:\n        r#\"#let f() = panic()\n            #let g() = f()\n            #g()\"#\n    }],\n})"
+---
+init:
+  default_format: Html
+  source_mode: Markup
+  page_setup: |
+  ```typc
+  set page(width: auto, height: auto, margin: 16pt)
+  ```
+  inputs: []
+
+--- request 1 ---
+kind: execute
+input: |
+  ```typ
+  #let f() = panic()
+              #let g() = f()
+              #g()
+  ```
+effective_format: Html
+status: error
+traceback: |
+  ```text
+  error: panicked
+    ┌─ <stdin:2>:1:12
+    │
+  1 │ #let f() = panic()
+    │            ^^^^^^^
+  2 │             #let g() = f()
+    │                        --- error occurred in this call of function `f`
+  3 │             #g()
+    │              --- error occurred in this call of function `g`
+  ```

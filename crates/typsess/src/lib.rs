@@ -412,9 +412,6 @@ impl Default for TypstReplSession {
     }
 }
 
-#[cfg(test)]
-mod tests;
-
 fn source_error(message: impl Into<ecow::EcoString>) -> EcoVec<SourceDiagnostic> {
     eco_vec![SourceDiagnostic::error(Span::detached(), message)]
 }

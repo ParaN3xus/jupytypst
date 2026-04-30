@@ -1,0 +1,93 @@
+---
+source: crates/jupytypst/tests/kernel_snapshots.rs
+expression: "run_case(KernelCase\n{\n    init: KernelInit::new(RenderMode::Svg, SourceMode::Markup), fixtures:\n    vec![], requests:\n    vec![Request::Execute { input: \"// jupytypst: format=html\\ntest\" },\n    Request::Execute { input: \"// jupytypst: format=svg\\ntest\" },],\n})"
+---
+init:
+  default_format: Svg
+  source_mode: Markup
+  page_setup: |
+  ```typc
+  set page(width: auto, height: auto, margin: 16pt)
+  ```
+  inputs: []
+
+--- request 1 ---
+kind: execute
+input: |
+  ```typ
+  // jupytypst: format=html
+  test
+  ```
+effective_format: Html
+status: ok
+warnings: []
+output_kind: html
+output: |
+  ```html
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+    </head>
+    <body>
+      <p>test</p>
+    </body>
+  </html>
+
+  ```
+
+--- request 2 ---
+kind: execute
+input: |
+  ```typ
+  // jupytypst: format=svg
+  test
+  ```
+effective_format: Svg
+status: ok
+warnings: []
+output_kind: svg
+output: |
+  ```html
+  <style>
+  .jupytypst-pages {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    align-items: flex-start;
+  }
+  .jupytypst-page {
+    max-width: 100%;
+    overflow: auto;
+  }
+  .jupytypst-page > svg {
+    display: block;
+    max-width: 100%;
+    height: auto;
+  }
+  </style>
+  <div class="jupytypst-pages"><div class="jupytypst-page"><svg class="typst-doc" viewBox="0 0 48.159 39.238" width="48.159pt" height="39.238pt" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:h5="http://www.w3.org/1999/xhtml">
+      <path class="typst-shape" fill="#ffffff" fill-rule="nonzero" d="M 0 0v 39.238 h 48.159 v -39.238 Z "/>
+      <g>
+          <g class="typst-text" transform="matrix(1 0 0 -1 16 23.238)">
+              <use xlink:href="#g55001E27B5AEDEA47687C2C9DE9B6F28" x="0" y="0" fill="#000000" fill-rule="nonzero"/>
+              <use xlink:href="#gA03E9C6FC96AAD8F926083AB0A66F7F2" x="3.476" y="0" fill="#000000" fill-rule="nonzero"/>
+              <use xlink:href="#gEA195BF2B82421E519C84C8C53F076D5" x="8.393" y="0" fill="#000000" fill-rule="nonzero"/>
+              <use xlink:href="#g55001E27B5AEDEA47687C2C9DE9B6F28" x="12.683" y="0" fill="#000000" fill-rule="nonzero"/>
+          </g>
+      </g>
+      <defs id="glyph">
+          <symbol id="g55001E27B5AEDEA47687C2C9DE9B6F28" overflow="visible">
+              <path d="M 0 0m 0.473 4.719 c -0.15399998 0 -0.19799998 -0.13199997 -0.19799998 -0.21999979 v -0.14300013 c 0 -0.05499983 0.011000007 -0.065999985 0.054999977 -0.065999985 h 0.649 v -3.3109999 c 0 -0.78099996 0.34099996 -1.089 0.847 -1.089 c 0.50600004 0 1.056 0.242 1.4849999 0.726 c -0.021999836 0.110000014 -0.08799982 0.176 -0.19799995 0.18699998 c -0.286 -0.21999997 -0.61599994 -0.30799997 -0.90199995 -0.30799997 c -0.29699993 0 -0.36299992 0.32999998 -0.36299992 1.012 v 2.783 h 1.144 c 0.109999895 0 0.26399994 0.04400015 0.26399994 0.14300013 v 0.21999979 c 0 0.04400015 -0.032999992 0.065999985 -0.08800006 0.065999985 h -1.3199999 v 0.4289999 c 0 0.71500015 0.04399991 1.1550002 0.04399991 1.1550002 c 0 0.065999985 -0.032999992 0.09899998 -0.08799994 0.09899998 c -0.04400003 0 -0.143 -0.04400015 -0.24199998 -0.09899998 c -0.12100005 -0.065999985 -0.23100007 -0.12099981 -0.37400007 -0.1539998 c -0.13199997 -0.04400015 -0.24199998 -0.07700014 -0.24199998 -0.15400028 c 0 -0.13199997 0.032999992 -0.05499983 0.032999992 -1.276 Z "/>
+          </symbol>
+          <symbol id="gA03E9C6FC96AAD8F926083AB0A66F7F2" overflow="visible">
+              <path d="M 0 0m 4.246 1.023 c -0.40699983 -0.41799998 -0.72599983 -0.594 -1.3639998 -0.594 c -0.3959999 0 -0.85800004 0.23099998 -1.199 0.79199994 c -0.22000003 0.36300004 -0.352 0.86899996 -0.352 1.507 l 2.926 -0.021999836 c 0.13199997 0 0.20900011 0.065999985 0.20900011 0.1869998 c 0 0.924 -0.32999992 1.9140003 -1.8590002 1.9140003 c -0.9569999 0 -2.1999998 -0.9130001 -2.1999998 -2.5850003 c 0 -0.61599994 0.15399998 -1.2099999 0.517 -1.6279999 c 0.37399995 -0.44 0.8909999 -0.704 1.6829998 -0.704 c 0.8360002 0 1.4300003 0.385 1.8699999 0.957 c -0.032999992 0.110000014 -0.09899998 0.16499996 -0.23099995 0.176 Z m -2.882 2.079 c 0.20899999 1.2429998 0.979 1.3419998 1.2429999 1.3419998 c 0.41800022 0 0.9130001 -0.23099995 0.9130001 -1.1549997 c 0 -0.09899998 -0.04399991 -0.15400004 -0.16499996 -0.15400004 Z "/>
+          </symbol>
+          <symbol id="gEA195BF2B82421E519C84C8C53F076D5" overflow="visible">
+              <path d="M 0 0m 0.528 1.518 c 0.04400003 -0.53900003 0.07700002 -1.056 0.07700002 -1.518 c 0.109999955 0.022 0.21999997 0.033 0.27499998 0.033 c 0.07700002 0 0.143 0 0.22000003 -0.022 c 0.29699993 -0.077 0.594 -0.121 1.001 -0.121 c 0.61599994 0 1.7489998 0.297 1.7489998 1.386 c 0 0.7479999 -0.53900003 1.188 -1.287 1.463 c -0.65999997 0.25300002 -1.1 0.41799998 -1.1 1.023 c 0 0.45099974 0.39600003 0.704 0.7700001 0.704 c 0.24199986 0 0.8799999 -0.0880003 1.023 -1.023 c 0.065999985 -0.065999985 0.286 -0.055000067 0.352 0.010999918 c 0.032999992 0.3959999 0.05499983 0.803 0.065999985 1.1659999 c -0.34100008 0.055000305 -0.86899996 0.20900011 -1.441 0.20900011 c -0.814 0 -1.5510001 -0.5279999 -1.5510001 -1.2320001 c 0 -0.803 0.36299998 -1.1439998 1.21 -1.4959998 c 0.9130001 -0.37400007 1.122 -0.605 1.122 -1.0780001 c 0 -0.53900003 -0.5279999 -0.77 -0.93499994 -0.77 c -0.42900002 0 -0.671 0.143 -0.781 0.26400003 c -0.24199998 0.25299996 -0.36299998 0.7369999 -0.42899996 1.0120001 c -0.066000044 0.065999985 -0.27500004 0.054999948 -0.34100002 -0.011000037 Z "/>
+          </symbol>
+      </defs>
+  </svg>
+  </div></div>
+  ```

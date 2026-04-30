@@ -21,3 +21,6 @@ typst-html.workspace = true
 typst-svg.workspace = true
 typsess.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+insta.workspace = true

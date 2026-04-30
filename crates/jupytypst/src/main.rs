@@ -9,19 +9,11 @@ use jupyter_protocol::JupyterKernelspec;
 use tempfile::TempDir;
 use typsess::{RenderMode, SourceMode, WorldOptions};
 
-mod cell;
-mod kernel;
-mod output;
-mod persist;
-mod repl;
-mod session;
+use jupytypst::{CODE_DISPLAY_NAME, DEFAULT_PAGE_SETUP, MARKUP_DISPLAY_NAME, kernel, repl};
 
 const CODE_KERNEL_NAME: &str = "jupytypst-code";
 const MARKUP_KERNEL_NAME: &str = "jupytypst-markup";
-const CODE_DISPLAY_NAME: &str = "Typst (Code Mode)";
-const MARKUP_DISPLAY_NAME: &str = "Typst";
 const ENV_PATH_SEP: char = if cfg!(windows) { ';' } else { ':' };
-const DEFAULT_PAGE_SETUP: &str = "set page(width: auto, height: auto, margin: 16pt)";
 
 #[derive(Debug, Parser)]
 #[command(author, version, about)]

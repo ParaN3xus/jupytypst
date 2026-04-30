@@ -1,0 +1,72 @@
+---
+source: crates/jupytypst/tests/kernel_snapshots.rs
+expression: "run_case(KernelCase\n{\n    init: KernelInit::new(RenderMode::Svg, SourceMode::Markup), fixtures:\n    vec![], requests:\n    vec![Request::Execute\n    { input: r#\"1\n            #pagebreak()\n            2\"# }],\n})"
+---
+init:
+  default_format: Svg
+  source_mode: Markup
+  page_setup: |
+  ```typc
+  set page(width: auto, height: auto, margin: 16pt)
+  ```
+  inputs: []
+
+--- request 1 ---
+kind: execute
+input: |
+  ```typ
+  1
+              #pagebreak()
+              2
+  ```
+effective_format: Svg
+status: ok
+warnings: []
+output_kind: svg
+output: |
+  ```html
+  <style>
+  .jupytypst-pages {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    align-items: flex-start;
+  }
+  .jupytypst-page {
+    max-width: 100%;
+    overflow: auto;
+  }
+  .jupytypst-page > svg {
+    display: block;
+    max-width: 100%;
+    height: auto;
+  }
+  </style>
+  <div class="jupytypst-pages"><div class="jupytypst-page"><svg class="typst-doc" viewBox="0 0 37.114999999999995 39.238" width="37.114999999999995pt" height="39.238pt" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:h5="http://www.w3.org/1999/xhtml">
+      <path class="typst-shape" fill="#ffffff" fill-rule="nonzero" d="M 0 0v 39.238 h 37.115 v -39.238 Z "/>
+      <g>
+          <g class="typst-text" transform="matrix(1 0 0 -1 16 23.238)">
+              <use xlink:href="#g1998CEC16940FEF129CF0345C446826F" x="0" y="0" fill="#000000" fill-rule="nonzero"/>
+          </g>
+      </g>
+      <defs id="glyph">
+          <symbol id="g1998CEC16940FEF129CF0345C446826F" overflow="visible">
+              <path d="M 0 0m 3.168 1.342 v 3.817 c 0 0.65999985 0.010999918 1.3309999 0.032999992 1.474 c 0 0.05499983 -0.022000074 0.05499983 -0.065999985 0.05499983 c -0.605 -0.3739996 -1.188 -0.6489997 -2.1560001 -1.0999999 c 0.022000074 -0.12099981 0.065999985 -0.23099995 0.16500008 -0.29699993 c 0.5059999 0.20900011 0.7479999 0.2750001 0.957 0.2750001 c 0.18700004 0 0.22000003 -0.26399994 0.22000003 -0.638 v -3.586 c 0 -0.913 -0.29700017 -0.968 -1.0670002 -1.001 c -0.065999985 -0.065999985 -0.065999985 -0.297 0 -0.36299998 c 0.53900003 0.011 0.93499994 0.022 1.529 0.022 c 0.5279999 0 0.79200006 -0.011 1.342 -0.022 c 0.065999985 0.066 0.065999985 0.297 0 0.36299998 c -0.77 0.033000022 -0.957 0.088 -0.957 1.001 Z "/>
+          </symbol>
+      </defs>
+  </svg>
+  </div><div class="jupytypst-page"><svg class="typst-doc" viewBox="0 0 37.114999999999995 39.238" width="37.114999999999995pt" height="39.238pt" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:h5="http://www.w3.org/1999/xhtml">
+      <path class="typst-shape" fill="#ffffff" fill-rule="nonzero" d="M 0 0v 39.238 h 37.115 v -39.238 Z "/>
+      <g>
+          <g class="typst-text" transform="matrix(1 0 0 -1 16 23.238)">
+              <use xlink:href="#gEE534460A1558A3776B537A3C1116324" x="0" y="0" fill="#000000" fill-rule="nonzero"/>
+          </g>
+      </g>
+      <defs id="glyph">
+          <symbol id="gEE534460A1558A3776B537A3C1116324" overflow="visible">
+              <path d="M 0 0m 0.671 5.148 c 0 -0.23099995 0.20899999 -0.4289999 0.43999994 -0.4289999 c 0.18700004 0 0.5170001 0.19799995 0.5170001 0.44000006 c 0 0.08799982 -0.022000074 0.15400028 -0.04400003 0.23099995 c -0.021999955 0.07700014 -0.08799994 0.17600012 -0.08799994 0.26399994 c 0 0.2750001 0.2859999 0.671 1.089 0.671 c 0.3959999 0 0.957 -0.27499962 0.957 -1.3309999 c 0 -0.704 -0.25300002 -1.276 -0.9020002 -1.9359999 l -0.8139999 -0.8030002 c -1.078 -1.0999999 -1.254 -1.6279999 -1.254 -2.277 c 0 0 0.561 0.022 0.913 0.022 h 1.9250001 c 0.352 0 0.85800004 -0.022 0.85800004 -0.022 c 0.14299965 0.583 0.25299978 1.408 0.26399994 1.7379999 c -0.065999985 0.055000067 -0.20900011 0.07700002 -0.31900024 0.055000067 c -0.1869998 -0.781 -0.37399983 -1.056 -0.76999974 -1.056 h -1.9580001 c 0 0.52800006 0.75899994 1.276 0.814 1.3310001 l 1.1110001 1.0669999 c 0.6270001 0.605 1.0999997 1.0890002 1.0999997 1.9250002 c 0 1.1879997 -0.9679997 1.6719999 -1.8589997 1.6719999 c -1.2210001 0 -1.98 -0.90199995 -1.98 -1.5620003 Z "/>
+          </symbol>
+      </defs>
+  </svg>
+  </div></div>
+  ```
