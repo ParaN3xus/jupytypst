@@ -249,6 +249,77 @@ fn markup_mode_persists_definitions_with_hash_prefix() {
 }
 
 #[test]
+fn persisted_markup_functions_keep_previous_source_spans() {
+    let mut session = test_session(
+        RenderMode::Html,
+        SourceMode::Markup,
+        DEFAULT_TEST_PAGE_SETUP,
+        WorldOptions::default(),
+    );
+    session.execute("#let f() = panic()").unwrap();
+    session.execute("#let g() = f()").unwrap();
+    let errors = session.execute("#g()").unwrap_err();
+    let diagnostic = errors.first().expect("expected a Typst diagnostic");
+    let sources = session.diagnostic_sources();
+    let first_user_source = sources
+        .iter()
+        .find(|source| source.source == "#let f() = panic()")
+        .expect("missing first input source");
+    let current_user_source = sources
+        .iter()
+        .find(|source| source.source == "#g()")
+        .expect("missing current input source");
+    let second_user_source = sources
+        .iter()
+        .find(|source| source.source == "#let g() = f()")
+        .expect("missing second input source");
+
+    assert_eq!(diagnostic.span.id(), Some(first_user_source.id));
+    assert!(
+        diagnostic
+            .trace
+            .iter()
+            .any(|trace| trace.span.id() == Some(second_user_source.id)),
+        "missing second input trace: {diagnostic:?}"
+    );
+    assert!(
+        diagnostic
+            .trace
+            .iter()
+            .any(|trace| trace.span.id() == Some(current_user_source.id))
+    );
+}
+
+#[test]
+fn code_only_markup_cell_preserves_call_trace() {
+    let mut session = test_session(
+        RenderMode::Html,
+        SourceMode::Markup,
+        DEFAULT_TEST_PAGE_SETUP,
+        WorldOptions::default(),
+    );
+    let errors = session
+        .execute("#let f() = panic()\n\n#let g() = f()\n\n\n#g()")
+        .unwrap_err();
+    let diagnostic = errors.first().expect("expected a Typst diagnostic");
+
+    assert!(
+        diagnostic
+            .trace
+            .iter()
+            .any(|trace| trace.v.to_string().contains("function `f`")),
+        "missing f call trace: {diagnostic:?}"
+    );
+    assert!(
+        diagnostic
+            .trace
+            .iter()
+            .any(|trace| trace.v.to_string().contains("function `g`")),
+        "missing g call trace: {diagnostic:?}"
+    );
+}
+
+#[test]
 fn new_session_defaults_to_markup_mode() {
     let mut session = TypstReplSession::new(SessionOptions::default()).unwrap();
     let html = html_output(session.execute("Hello\n#let x = 1\n#x").unwrap());
@@ -292,6 +363,81 @@ fn world_root_controls_relative_imports() {
             .unwrap(),
     );
     assert!(html.contains("Imported"));
+}
+
+#[test]
+fn diagnostics_include_imported_source_tracepoints() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    std::fs::write(temp_dir.path().join("defs.typ"), "#let f() = panic()").unwrap();
+    let mut session = test_session(
+        RenderMode::Html,
+        SourceMode::Code,
+        DEFAULT_TEST_PAGE_SETUP,
+        WorldOptions {
+            root: Some(temp_dir.path().to_path_buf()),
+            ..WorldOptions::default()
+        },
+    );
+
+    session
+        .execute("import \"defs.typ\": f\nf()")
+        .expect_err("imported function should panic");
+    assert!(
+        session
+            .diagnostic_sources()
+            .iter()
+            .any(|source| source.name.ends_with("/defs.typ")),
+        "missing imported diagnostic source"
+    );
+}
+
+#[test]
+fn single_importing_cell_keeps_user_and_imported_tracepoints() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    std::fs::write(temp_dir.path().join("defs.typ"), "#let invoke(f) = f()").unwrap();
+    let mut session = test_session(
+        RenderMode::Html,
+        SourceMode::Markup,
+        DEFAULT_TEST_PAGE_SETUP,
+        WorldOptions {
+            root: Some(temp_dir.path().to_path_buf()),
+            ..WorldOptions::default()
+        },
+    );
+
+    let errors = session
+        .execute(
+            "#import \"defs.typ\": invoke\n\
+             #let f = () => panic()\n\n\
+             #invoke(f)",
+        )
+        .expect_err("callback should panic");
+    let sources = session.diagnostic_sources();
+    let user_source = sources
+        .iter()
+        .find(|source| source.source.contains("panic()"))
+        .expect("missing user diagnostic source");
+    let imported_source = sources
+        .iter()
+        .find(|source| source.name.ends_with("/defs.typ"))
+        .expect("missing imported diagnostic source");
+    let diagnostic = errors.first().expect("expected a diagnostic");
+
+    assert_eq!(diagnostic.span.id(), Some(user_source.id));
+    assert!(
+        diagnostic
+            .trace
+            .iter()
+            .any(|trace| trace.span.id() == Some(imported_source.id)),
+        "missing imported tracepoint: {diagnostic:?}"
+    );
+    assert!(
+        diagnostic
+            .trace
+            .iter()
+            .any(|trace| trace.span.id() == Some(user_source.id)),
+        "missing user tracepoint: {diagnostic:?}"
+    );
 }
 
 #[test]

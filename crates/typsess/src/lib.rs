@@ -1,34 +1,31 @@
-use std::borrow::Cow;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use comemo::{Constraint, Track};
+use comemo::Track;
 use ecow::{EcoVec, eco_vec};
-use tinymist_vfs::ImmutDict;
-use tinymist_world::args::CompilePackageArgs;
-use tinymist_world::config::CompileFontOpts;
-use tinymist_world::font::{FontResolverImpl, system::SystemFontSearcher};
-use tinymist_world::system::{SystemUniverseBuilder, TypstSystemWorld};
-use tinymist_world::{EntryState, ShadowApi};
+use tinymist_world::system::TypstSystemWorld;
+use tinymist_world::{EntryState, ShadowApi, TaskInputs};
 use typst::World;
-use typst::diag::{At, SourceDiagnostic};
+use typst::diag::SourceDiagnostic;
 use typst::engine::{Engine, Route, Sink, Traced};
-use typst::foundations::{
-    Bytes, Content, Context, IntoValue, Scope, Scopes, Style, StyleChain, Styles, Target,
-    TargetElem, Value, ops,
-};
+use typst::foundations::{Bytes, Content, Context, Scope, Scopes, Styles};
 use typst::introspection::Introspector;
 use typst::layout::PagedDocument;
-use typst::syntax::{Source, Span, VirtualPath, ast, ast::AstNode};
-use typst::utils::LazyHash;
-use typst_eval::{Eval, Vm};
+use typst::syntax::{Span, VirtualPath};
+use typst_eval::Vm;
 
+mod diagnostics;
+mod eval;
 mod input;
+mod layout;
+mod world;
 
+pub use diagnostics::DiagnosticSource;
+use diagnostics::{DiagnosticSourceMap, diagnostic_source_name, remap_diagnostics};
+use eval::{EvaluatedCell, EvaluatedSource, eval_source_capture, parsed_source, span_offset};
 pub use input::{InputStatus, classify_input};
-
-const CODE_WRAPPER_PREFIX: &str = "#{\n";
-const CODE_WRAPPER_SUFFIX: &str = "\n}";
+use layout::layout_current_document;
+use world::create_world;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenderMode {
@@ -70,6 +67,9 @@ pub struct SessionState {
     pub scope: Scope,
     pub styles: Styles,
     pub introspection_updates: Vec<Content>,
+    pub diagnostic_sources: Vec<DiagnosticSource>,
+    pub diagnostic_source_maps: Vec<DiagnosticSourceMap>,
+    pub next_source_index: usize,
 }
 
 pub type StylePersistence = Arc<dyn Fn(Styles) -> Styles + Send + Sync + 'static>;
@@ -116,20 +116,28 @@ pub struct TypstReplSession {
     scope: Scope,
     styles: Styles,
     introspection_updates: Vec<Content>,
+    diagnostic_sources: Vec<DiagnosticSource>,
+    diagnostic_source_maps: Vec<DiagnosticSourceMap>,
+    next_source_index: usize,
     persistence: SessionPersistence,
+    root: PathBuf,
     world: TypstSystemWorld,
 }
 
 impl TypstReplSession {
     pub fn new(options: SessionOptions) -> typst::diag::SourceResult<Self> {
-        let world = create_world(&options.world_options)?;
+        let (world, root) = create_world(&options.world_options)?;
         Ok(Self {
             render_mode: options.render_mode,
             source_mode: options.source_mode,
             scope: options.state.scope,
             styles: options.state.styles,
             introspection_updates: options.state.introspection_updates,
+            diagnostic_sources: options.state.diagnostic_sources,
+            diagnostic_source_maps: options.state.diagnostic_source_maps,
+            next_source_index: options.state.next_source_index,
             persistence: options.persistence,
+            root,
             world,
         })
     }
@@ -139,7 +147,14 @@ impl TypstReplSession {
             scope: self.scope,
             styles: self.styles,
             introspection_updates: self.introspection_updates,
+            diagnostic_sources: self.diagnostic_sources,
+            diagnostic_source_maps: self.diagnostic_source_maps,
+            next_source_index: self.next_source_index,
         }
+    }
+
+    pub fn diagnostic_sources(&self) -> &[DiagnosticSource] {
+        &self.diagnostic_sources
     }
 
     pub fn apply_source(
@@ -165,8 +180,15 @@ impl TypstReplSession {
         let evaluated = self.evaluate_code(source)?;
         let content = self.with_introspection_context(evaluated.content.clone());
         let output = match render_mode {
-            RenderMode::Svg => self.render_svg(content)?,
-            RenderMode::Html => self.render_html(content)?,
+            RenderMode::Svg => self.render_svg(content),
+            RenderMode::Html => self.render_html(content),
+        };
+        let output = match output {
+            Ok(output) => output,
+            Err(diagnostics) => {
+                let diagnostics = self.prepare_diagnostics(diagnostics, evaluated.source_map_index);
+                return Err(diagnostics);
+            }
         };
         self.introspection_updates
             .extend((self.persistence.collect_introspection_updates)(
@@ -192,6 +214,7 @@ impl TypstReplSession {
         Ok(EvaluatedCell {
             content,
             warnings: evaluated.warnings,
+            source_map_index: evaluated.source_map_index,
         })
     }
 
@@ -201,24 +224,56 @@ impl TypstReplSession {
         source_mode: SourceMode,
         filter_styles: &dyn Fn(Styles) -> Styles,
     ) -> typst::diag::SourceResult<EvaluatedSource> {
-        self.world
-            .map_shadow_by_id(self.world.main(), Bytes::from_string(source.to_string()))
-            .map_err(|error| {
-                source_error(format!("failed to update Typst main source: {error}"))
-            })?;
+        let source_index = self.next_source_index;
+        self.next_source_index += 1;
+        let source_path = format!(".jupytypst-input-{source_index}.typ");
+        let source_file = self.root.join(&source_path);
+        let entry = EntryState::new_rooted(
+            self.root.clone().into(),
+            Some(VirtualPath::new(format!("/{source_path}"))),
+        );
+        let source_id = entry
+            .main()
+            .expect("entry source should have a main file id");
+        let display_id = typst::syntax::FileId::new_fake(VirtualPath::new(format!(
+            "/jupytypst-input-{source_index}.typ"
+        )));
 
-        let parsed_source = parsed_source(self.world.main(), source, source_mode);
+        let parsed_source = parsed_source(source_id, source, source_mode);
+        self.world = self.world.task(TaskInputs {
+            entry: Some(entry),
+            inputs: None,
+        });
+        self.world
+            .map_shadow(
+                &source_file,
+                Bytes::from_string(parsed_source.text().to_string()),
+            )
+            .map_err(|error| {
+                source_error(format!("failed to update Typst source shadow: {error}"))
+            })?;
+        self.diagnostic_sources.push(DiagnosticSource {
+            id: display_id,
+            name: format!("<stdin:{}>", source_index + 1),
+            source: source.to_string(),
+        });
+        self.diagnostic_source_maps.push(DiagnosticSourceMap {
+            source: parsed_source.clone(),
+            display_id,
+            offset: span_offset(source_mode),
+            source_len: source.len(),
+        });
+        let source_map_index = self.diagnostic_source_maps.len() - 1;
+
         let root = parsed_source.root();
-        let span_offset = span_offset(source_mode);
 
         let errors = root.errors();
         if !errors.is_empty() {
-            return Err(remap_diagnostics(
+            let diagnostics = self.prepare_diagnostics(
                 errors.into_iter().map(Into::into).collect(),
-                &parsed_source,
-                span_offset,
-                source.len(),
-            ));
+                source_map_index,
+            );
+            return Err(diagnostics);
         }
 
         let mut sink = Sink::new();
@@ -248,21 +303,14 @@ impl TypstReplSession {
             ) {
                 Ok(value) => value,
                 Err(diagnostics) => {
-                    return Err(remap_diagnostics(
-                        diagnostics,
-                        &parsed_source,
-                        span_offset,
-                        source.len(),
-                    ));
+                    let diagnostics = self.prepare_diagnostics(diagnostics, source_map_index);
+                    return Err(diagnostics);
                 }
             };
             if let Some(flow) = vm.flow {
-                return Err(remap_diagnostics(
-                    eco_vec![flow.forbidden()],
-                    &parsed_source,
-                    span_offset,
-                    source.len(),
-                ));
+                let diagnostics =
+                    self.prepare_diagnostics(eco_vec![flow.forbidden()], source_map_index);
+                return Err(diagnostics);
             }
             let new_scope = vm.scopes.top.clone();
             drop(vm);
@@ -274,8 +322,62 @@ impl TypstReplSession {
             value,
             scope: new_scope,
             captured_styles,
-            warnings: remap_diagnostics(sink_warnings, &parsed_source, span_offset, source.len()),
+            warnings: remap_diagnostics(
+                sink_warnings,
+                &self.diagnostic_source_maps,
+                source_map_index,
+            ),
+            source_map_index,
         })
+    }
+
+    fn prepare_diagnostics(
+        &mut self,
+        diagnostics: EcoVec<SourceDiagnostic>,
+        primary_source_map_index: usize,
+    ) -> EcoVec<SourceDiagnostic> {
+        let diagnostics = remap_diagnostics(
+            diagnostics,
+            &self.diagnostic_source_maps,
+            primary_source_map_index,
+        );
+        self.record_world_diagnostic_sources(&diagnostics);
+        remap_diagnostics(
+            diagnostics,
+            &self.diagnostic_source_maps,
+            primary_source_map_index,
+        )
+    }
+
+    fn record_world_diagnostic_sources(&mut self, diagnostics: &EcoVec<SourceDiagnostic>) {
+        let ids = diagnostics
+            .iter()
+            .flat_map(|diagnostic| {
+                std::iter::once(diagnostic.span)
+                    .chain(diagnostic.trace.iter().map(|trace| trace.span))
+            })
+            .filter_map(Span::id)
+            .collect::<Vec<_>>();
+
+        for id in ids {
+            if self.diagnostic_sources.iter().any(|source| source.id == id) {
+                continue;
+            }
+            let Ok(source) = self.world.source(id) else {
+                continue;
+            };
+            self.diagnostic_sources.push(DiagnosticSource {
+                id,
+                name: diagnostic_source_name(id),
+                source: source.text().to_string(),
+            });
+            self.diagnostic_source_maps.push(DiagnosticSourceMap {
+                source: source.clone(),
+                display_id: id,
+                offset: 0,
+                source_len: source.text().len(),
+            });
+        }
     }
 
     fn render_svg(&self, content: Content) -> typst::diag::SourceResult<ExecutionOutput> {
@@ -308,366 +410,6 @@ impl Default for TypstReplSession {
     fn default() -> Self {
         Self::new(SessionOptions::default()).expect("default session options should be valid")
     }
-}
-
-struct EvaluatedCell {
-    content: Content,
-    warnings: EcoVec<SourceDiagnostic>,
-}
-
-struct EvaluatedSource {
-    value: Value,
-    scope: Scope,
-    captured_styles: Styles,
-    warnings: EcoVec<SourceDiagnostic>,
-}
-
-fn eval_code_capture<'a>(
-    vm: &mut Vm,
-    exprs: &mut impl Iterator<Item = ast::Expr<'a>>,
-    filter_styles: &dyn Fn(Styles) -> Styles,
-    captured_styles: &mut Styles,
-) -> typst::diag::SourceResult<Value> {
-    let flow = vm.flow.take();
-    let mut output = Value::None;
-
-    while let Some(expr) = exprs.next() {
-        let value = match expr {
-            ast::Expr::SetRule(set) => {
-                let styles = set.eval(vm)?;
-                captured_styles.apply(filter_styles(styles.clone()));
-                if vm.flow.is_some() {
-                    break;
-                }
-                let tail = eval_code_capture(vm, exprs, filter_styles, captured_styles)?.display();
-                Value::Content(tail.styled_with_map(styles))
-            }
-            ast::Expr::ShowRule(show) => {
-                let recipe = show.eval(vm)?;
-                captured_styles.apply(Style::from(recipe.clone()).into());
-                if vm.flow.is_some() {
-                    break;
-                }
-                let tail = eval_code_capture(vm, exprs, filter_styles, captured_styles)?.display();
-                Value::Content(tail.styled_with_recipe(&mut vm.engine, vm.context, recipe)?)
-            }
-            ast::Expr::CodeBlock(block) => {
-                eval_code_block_capture(vm, block, filter_styles, captured_styles)?
-            }
-            _ => {
-                let span = expr.span();
-                let value = expr.eval(vm)?;
-                output = ops::join(output, value).at(span)?;
-
-                if vm.flow.is_some() {
-                    break;
-                }
-                continue;
-            }
-        };
-
-        output = ops::join(output, value).at(expr.span())?;
-
-        if vm.flow.is_some() {
-            break;
-        }
-    }
-
-    if flow.is_some() {
-        vm.flow = flow;
-    }
-
-    Ok(output)
-}
-
-fn eval_markup_capture<'a>(
-    vm: &mut Vm,
-    exprs: &mut impl Iterator<Item = ast::Expr<'a>>,
-    filter_styles: &dyn Fn(Styles) -> Styles,
-    captured_styles: &mut Styles,
-) -> typst::diag::SourceResult<Content> {
-    let flow = vm.flow.take();
-    let mut output = Vec::new();
-
-    while let Some(expr) = exprs.next() {
-        match expr {
-            ast::Expr::SetRule(set) => {
-                let styles = set.eval(vm)?;
-                captured_styles.apply(filter_styles(styles.clone()));
-                if vm.flow.is_some() {
-                    break;
-                }
-                output.push(
-                    eval_markup_capture(vm, exprs, filter_styles, captured_styles)?
-                        .styled_with_map(styles),
-                );
-            }
-            ast::Expr::ShowRule(show) => {
-                let recipe = show.eval(vm)?;
-                captured_styles.apply(Style::from(recipe.clone()).into());
-                if vm.flow.is_some() {
-                    break;
-                }
-                let tail = eval_markup_capture(vm, exprs, filter_styles, captured_styles)?;
-                output.push(tail.styled_with_recipe(&mut vm.engine, vm.context, recipe)?);
-            }
-            expr => {
-                let value = expr.eval(vm)?;
-                if !matches!(value, Value::Label(_)) {
-                    output.push(value.display().spanned(expr.span()));
-                }
-            }
-        }
-
-        if vm.flow.is_some() {
-            break;
-        }
-    }
-
-    if flow.is_some() {
-        vm.flow = flow;
-    }
-
-    Ok(Content::sequence(output))
-}
-
-fn eval_source_capture(
-    vm: &mut Vm,
-    root: &typst::syntax::SyntaxNode,
-    source_mode: SourceMode,
-    filter_styles: &dyn Fn(Styles) -> Styles,
-    captured_styles: &mut Styles,
-) -> typst::diag::SourceResult<Value> {
-    match source_mode {
-        SourceMode::Code => {
-            let code = wrapped_code_body(root)?;
-            eval_code_capture(vm, &mut code.exprs(), filter_styles, captured_styles)
-        }
-        SourceMode::Markup => {
-            let markup = root
-                .cast::<ast::Markup>()
-                .ok_or_else(|| source_error("failed to parse Typst markup"))?;
-            Ok(Value::Content(eval_markup_capture(
-                vm,
-                &mut markup.exprs(),
-                filter_styles,
-                captured_styles,
-            )?))
-        }
-    }
-}
-
-fn eval_code_block_capture(
-    vm: &mut Vm,
-    block: ast::CodeBlock,
-    filter_styles: &dyn Fn(Styles) -> Styles,
-    captured_styles: &mut Styles,
-) -> typst::diag::SourceResult<Value> {
-    vm.scopes.enter();
-    let output = eval_code_capture(
-        vm,
-        &mut block.body().exprs(),
-        filter_styles,
-        captured_styles,
-    );
-    vm.scopes.exit();
-    output
-}
-
-fn wrapped_code_body(root: &typst::syntax::SyntaxNode) -> typst::diag::SourceResult<ast::Code<'_>> {
-    let markup = root
-        .cast::<ast::Markup>()
-        .ok_or_else(|| source_error("failed to parse wrapped Typst code"))?;
-    markup
-        .exprs()
-        .find_map(|expr| match expr {
-            ast::Expr::CodeBlock(block) => Some(block.body()),
-            _ => None,
-        })
-        .ok_or_else(|| source_error("failed to find wrapped Typst code body"))
-}
-
-fn parsed_source(file_id: typst::syntax::FileId, source: &str, mode: SourceMode) -> Source {
-    let text = match mode {
-        SourceMode::Code => format!("{CODE_WRAPPER_PREFIX}{source}{CODE_WRAPPER_SUFFIX}"),
-        SourceMode::Markup => source.to_string(),
-    };
-    Source::new(file_id, text)
-}
-
-fn span_offset(mode: SourceMode) -> usize {
-    match mode {
-        SourceMode::Code => CODE_WRAPPER_PREFIX.len(),
-        SourceMode::Markup => 0,
-    }
-}
-
-fn remap_diagnostics(
-    mut diagnostics: EcoVec<SourceDiagnostic>,
-    source: &Source,
-    offset: usize,
-    source_len: usize,
-) -> EcoVec<SourceDiagnostic> {
-    for diagnostic in diagnostics.make_mut() {
-        diagnostic.span = remap_span(diagnostic.span, source, offset, source_len);
-        for trace in diagnostic.trace.make_mut() {
-            trace.span = remap_span(trace.span, source, offset, source_len);
-        }
-    }
-    diagnostics
-}
-
-fn remap_span(span: Span, source: &Source, offset: usize, source_len: usize) -> Span {
-    let Some(range) = source.range(span) else {
-        return span;
-    };
-
-    let end = offset + source_len;
-    if range.start < offset || range.end > end {
-        return span;
-    }
-
-    Span::from_range(source.id(), range.start - offset..range.end - offset)
-}
-
-trait LayoutTarget: Sized {
-    const TARGET: Target;
-
-    fn layout(
-        engine: &mut Engine,
-        content: &Content,
-        styles: StyleChain,
-    ) -> typst::diag::SourceResult<Self>;
-
-    fn introspector(&self) -> &Introspector;
-}
-
-impl LayoutTarget for PagedDocument {
-    const TARGET: Target = Target::Paged;
-
-    fn layout(
-        engine: &mut Engine,
-        content: &Content,
-        styles: StyleChain,
-    ) -> typst::diag::SourceResult<Self> {
-        typst_layout::layout_document(engine, content, styles)
-    }
-
-    fn introspector(&self) -> &Introspector {
-        &self.introspector
-    }
-}
-
-impl LayoutTarget for typst_html::HtmlDocument {
-    const TARGET: Target = Target::Html;
-
-    fn layout(
-        engine: &mut Engine,
-        content: &Content,
-        styles: StyleChain,
-    ) -> typst::diag::SourceResult<Self> {
-        typst_html::html_document(engine, content, styles)
-    }
-
-    fn introspector(&self) -> &Introspector {
-        &self.introspector
-    }
-}
-
-fn layout_current_document<D: LayoutTarget>(
-    world: &dyn World,
-    content: &Content,
-) -> typst::diag::SourceResult<D> {
-    let library = world.library();
-    let base = StyleChain::new(&library.styles);
-    let target_style = TargetElem::target.set(D::TARGET).wrap();
-    let styles = base.chain(&target_style);
-    let empty_introspector = Introspector::default();
-    let traced = Traced::default();
-    let mut previous = None;
-
-    for iteration in 0..5 {
-        let current_introspector = previous
-            .as_ref()
-            .map(LayoutTarget::introspector)
-            .unwrap_or(&empty_introspector);
-        let constraint = Constraint::new();
-        let mut sink = Sink::new();
-        let document = {
-            let mut engine = Engine {
-                routines: &typst::ROUTINES,
-                world: world.track(),
-                introspector: current_introspector.track_with(&constraint),
-                traced: traced.track(),
-                sink: sink.track_mut(),
-                route: Route::default(),
-            };
-            D::layout(&mut engine, content, styles)?
-        };
-
-        let delayed = sink.delayed();
-        if !delayed.is_empty() {
-            return Err(delayed);
-        }
-
-        if constraint.validate(document.introspector()) || iteration == 4 {
-            return Ok(document);
-        }
-
-        previous = Some(document);
-    }
-
-    unreachable!("layout loop always returns within five iterations")
-}
-fn create_world(options: &WorldOptions) -> typst::diag::SourceResult<TypstSystemWorld> {
-    let root = options
-        .root
-        .clone()
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-    let root = if root.is_absolute() {
-        root
-    } else {
-        std::env::current_dir()
-            .unwrap_or_else(|_| PathBuf::from("."))
-            .join(root)
-    };
-    let entry = EntryState::new_rooted(root.into(), Some(VirtualPath::new(Path::new("/main.typ"))));
-    let fonts = resolve_fonts(options).map_err(|error| source_error(error.to_string()))?;
-    let package_options = CompilePackageArgs {
-        package_path: options.package_path.clone(),
-        package_cache_path: options.package_cache_path.clone(),
-    };
-    let package_registry = SystemUniverseBuilder::resolve_package(None, Some(&package_options));
-    let universe = SystemUniverseBuilder::build(
-        entry,
-        resolve_inputs(options),
-        fonts.into(),
-        package_registry,
-    );
-    Ok(universe.snapshot())
-}
-
-fn resolve_inputs(options: &WorldOptions) -> ImmutDict {
-    let pairs = options
-        .inputs
-        .iter()
-        .map(|(key, value)| (key.as_str().into(), value.as_str().into_value()));
-    Arc::new(LazyHash::new(pairs.collect()))
-}
-
-fn resolve_fonts(options: &WorldOptions) -> anyhow::Result<FontResolverImpl> {
-    let mut searcher = SystemFontSearcher::new();
-    let embedded_fonts = if options.ignore_embedded_fonts {
-        Vec::new()
-    } else {
-        typst_assets::fonts().map(Cow::Borrowed).collect()
-    };
-    searcher.resolve_opts(CompileFontOpts {
-        font_paths: options.font_paths.clone(),
-        no_system_fonts: options.ignore_system_fonts,
-        with_embedded_fonts: embedded_fonts,
-    })?;
-    Ok(searcher.build())
 }
 
 #[cfg(test)]

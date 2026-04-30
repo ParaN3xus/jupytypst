@@ -16,7 +16,9 @@ use runtimelib::{
 use uuid::Uuid;
 
 use crate::cell::parse_cell;
-use crate::output::{execution_output_to_html, format_diagnostics, format_diagnostics_rich};
+use crate::output::{
+    execution_output_to_html, format_diagnostics, format_diagnostics_rich_with_sources,
+};
 use crate::session::create_session;
 use crate::{CODE_DISPLAY_NAME, MARKUP_DISPLAY_NAME};
 use typsess::{
@@ -254,10 +256,16 @@ impl KernelServer {
             .await?;
 
         let result = match parse_cell(code, self.default_mode) {
-            Ok(cell) => self
-                .typst
-                .execute_with_mode(&cell.body, cell.mode)
-                .map_err(|diagnostics| format_diagnostics_rich(diagnostics, &cell.body)),
+            Ok(cell) => {
+                self.typst
+                    .execute_with_mode(&cell.body, cell.mode)
+                    .map_err(|diagnostics| {
+                        format_diagnostics_rich_with_sources(
+                            diagnostics,
+                            self.typst.diagnostic_sources(),
+                        )
+                    })
+            }
             Err(error) => Err(error.to_string()),
         };
 

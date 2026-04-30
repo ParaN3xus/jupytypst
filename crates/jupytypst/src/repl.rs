@@ -12,7 +12,7 @@ use typsess::{
     classify_input,
 };
 
-use crate::output::{format_diagnostics, format_diagnostics_rich};
+use crate::output::{format_diagnostics, format_diagnostics_rich_with_sources};
 use crate::session::create_session;
 
 const REPL_PROMPT_LABEL: &str = "typst";
@@ -125,7 +125,10 @@ fn execute_buffer(session: &mut TypstReplSession, buffer: &str, full_html: bool)
     let result = match session.execute(buffer) {
         Ok(result) => result,
         Err(diagnostics) => {
-            eprintln!("{}", format_diagnostics_rich(diagnostics, buffer));
+            eprintln!(
+                "{}",
+                format_diagnostics_rich_with_sources(diagnostics, session.diagnostic_sources())
+            );
             return;
         }
     };
@@ -135,7 +138,10 @@ fn execute_buffer(session: &mut TypstReplSession, buffer: &str, full_html: bool)
     let output = match execution_output_to_string(result.output, full_html) {
         Ok(output) => output,
         Err(diagnostics) => {
-            eprintln!("{}", format_diagnostics_rich(diagnostics, buffer));
+            eprintln!(
+                "{}",
+                format_diagnostics_rich_with_sources(diagnostics, session.diagnostic_sources())
+            );
             return;
         }
     };
