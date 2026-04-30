@@ -110,10 +110,12 @@ impl TypstSession {
         let mut setup_styles = Styles::new();
         if let Some(page_setup) = self.page_setup.code() {
             let setup = normalize_code_statement(page_setup);
-            setup_styles = self.evaluate_source(setup, false)?.captured_styles;
+            setup_styles = self
+                .evaluate_source(setup, StyleCapture::Local)?
+                .captured_styles;
         }
 
-        let evaluated = self.evaluate_source(code, true)?;
+        let evaluated = self.evaluate_source(code, StyleCapture::Persistent)?;
         self.scope = evaluated.scope;
         self.styles.apply(evaluated.captured_styles);
 
@@ -129,7 +131,11 @@ impl TypstSession {
         })
     }
 
-    fn evaluate_source(&self, source: &str, capture_styles: bool) -> Result<EvaluatedSource> {
+    fn evaluate_source(
+        &self,
+        source: &str,
+        style_capture: StyleCapture,
+    ) -> Result<EvaluatedSource> {
         self.world.replace_source(source);
 
         let span = Span::from_range(self.world.main(), 0..source.len());
@@ -164,7 +170,7 @@ impl TypstSession {
             let value = eval_code_capture(
                 &mut vm,
                 &mut root.cast::<ast::Code>().unwrap().exprs(),
-                capture_styles,
+                style_capture,
                 &mut captured_styles,
                 &mut warnings,
             )
@@ -279,10 +285,16 @@ struct EvaluatedSource {
     warnings: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StyleCapture {
+    Local,
+    Persistent,
+}
+
 fn eval_code_capture<'a>(
     vm: &mut Vm,
     exprs: &mut impl Iterator<Item = ast::Expr<'a>>,
-    capture_top_level: bool,
+    style_capture: StyleCapture,
     captured_styles: &mut Styles,
     warnings: &mut Vec<String>,
 ) -> typst::diag::SourceResult<Value> {
@@ -294,36 +306,42 @@ fn eval_code_capture<'a>(
         let value = match expr {
             ast::Expr::SetRule(set) => {
                 let styles = set.eval(vm)?;
-                if capture_top_level {
-                    captured_styles.apply(filter_persistent_styles(styles.clone()));
-                }
-                if vm.flow.is_some() {
-                    break;
-                }
-                let tail =
-                    eval_code_capture(vm, exprs, capture_top_level, captured_styles, warnings)?
-                        .display();
-                Value::Content(tail.styled_with_map(styles))
-            }
-            ast::Expr::ShowRule(show) => {
-                let recipe = show.eval(vm)?;
-                let is_anonymous = recipe.selector().is_none();
-                if capture_top_level {
-                    if is_anonymous {
-                        warnings.push(
-                            "jupytypst: anonymous `show: ...` rules are cell-local and are not persisted"
-                                .to_string(),
-                        );
-                    } else {
-                        captured_styles.apply(Style::from(recipe.clone()).into());
+                match style_capture {
+                    StyleCapture::Local => captured_styles.apply(styles.clone()),
+                    StyleCapture::Persistent => {
+                        captured_styles.apply(filter_persistent_styles(styles.clone()));
                     }
                 }
                 if vm.flow.is_some() {
                     break;
                 }
-                let tail =
-                    eval_code_capture(vm, exprs, capture_top_level, captured_styles, warnings)?
-                        .display();
+                let tail = eval_code_capture(vm, exprs, style_capture, captured_styles, warnings)?
+                    .display();
+                Value::Content(tail.styled_with_map(styles))
+            }
+            ast::Expr::ShowRule(show) => {
+                let recipe = show.eval(vm)?;
+                let is_anonymous = recipe.selector().is_none();
+                match style_capture {
+                    StyleCapture::Local => {
+                        captured_styles.apply(Style::from(recipe.clone()).into());
+                    }
+                    StyleCapture::Persistent => {
+                        if is_anonymous {
+                            warnings.push(
+                            "jupytypst: anonymous `show: ...` rules are cell-local and are not persisted"
+                                .to_string(),
+                        );
+                        } else {
+                            captured_styles.apply(Style::from(recipe.clone()).into());
+                        }
+                    }
+                }
+                if vm.flow.is_some() {
+                    break;
+                }
+                let tail = eval_code_capture(vm, exprs, style_capture, captured_styles, warnings)?
+                    .display();
                 Value::Content(tail.styled_with_recipe(&mut vm.engine, vm.context, recipe)?)
             }
             ast::Expr::CodeBlock(block) => block.eval(vm)?,
@@ -682,6 +700,29 @@ mod tests {
     }
 
     #[test]
+    fn default_page_setup_controls_rendered_svg_size() {
+        let mut default_session = TypstSession::default();
+        let mut no_setup_session = TypstSession::new(PageSetup::None);
+
+        let default_svg = svg_output(default_session.execute("[x]").unwrap());
+        let no_setup_svg = svg_output(no_setup_session.execute("[x]").unwrap());
+
+        let default_width = svg_dimension(&default_svg, "width");
+        let default_height = svg_dimension(&default_svg, "height");
+        let no_setup_width = svg_dimension(&no_setup_svg, "width");
+        let no_setup_height = svg_dimension(&no_setup_svg, "height");
+
+        assert!(
+            no_setup_width > default_width * 5.0,
+            "default page setup did not shrink SVG width: default={default_width}, none={no_setup_width}"
+        );
+        assert!(
+            no_setup_height > default_height * 5.0,
+            "default page setup did not shrink SVG height: default={default_height}, none={no_setup_height}"
+        );
+    }
+
+    #[test]
     fn page_setup_none_is_not_injected() {
         let session = TypstSession::new(PageSetup::None);
         let source = session.cell_source("[Test]").source;
@@ -765,5 +806,16 @@ mod tests {
                     .field_id(field)
                     .is_some_and(|id| property.is(style_element, id))
         })
+    }
+
+    fn svg_dimension(svg: &str, name: &str) -> f64 {
+        let needle = format!(r#"{name}=""#);
+        let start = svg.find(&needle).expect("missing SVG dimension") + needle.len();
+        let rest = &svg[start..];
+        let end = rest.find('"').expect("unterminated SVG dimension");
+        rest[..end]
+            .trim_end_matches("pt")
+            .parse()
+            .expect("invalid SVG dimension")
     }
 }
