@@ -1,5 +1,4 @@
 use ecow::EcoVec;
-use scraper::{Html, Selector};
 use typsess::ExecutionOutput;
 use typst::diag::SourceDiagnostic;
 
@@ -10,17 +9,6 @@ pub fn execution_output_to_html(
         ExecutionOutput::Paged(document) => Ok(svg_pages_html(&document)),
         ExecutionOutput::Html(document) => typst_html::html(&document),
     }
-}
-
-pub fn execution_output_to_cli_html(
-    output: ExecutionOutput,
-    full_html: bool,
-) -> Result<String, EcoVec<SourceDiagnostic>> {
-    let html = execution_output_to_html(output)?;
-    if full_html {
-        return Ok(html);
-    }
-    Ok(body_inner_html(&html).unwrap_or(html))
 }
 
 pub fn format_diagnostics(diagnostics: EcoVec<SourceDiagnostic>) -> String {
@@ -37,15 +25,6 @@ pub fn format_diagnostics_rich(diagnostics: EcoVec<SourceDiagnostic>, source: &s
         .map(|diagnostic| format_diagnostic_rich(&diagnostic, source))
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-fn body_inner_html(html: &str) -> Option<String> {
-    let document = Html::parse_document(html);
-    let selector = Selector::parse("body").ok()?;
-    document
-        .select(&selector)
-        .next()
-        .map(|body| body.inner_html().trim().to_string())
 }
 
 fn svg_pages_html(document: &typst::layout::PagedDocument) -> String {
@@ -162,12 +141,6 @@ mod tests {
     use typst::syntax::{Span, VirtualPath};
 
     use super::*;
-
-    #[test]
-    fn extracts_body_inner_html() {
-        let html = "<!DOCTYPE html><html><head></head><body><p>test</p></body></html>";
-        assert_eq!(body_inner_html(html).unwrap(), "<p>test</p>");
-    }
 
     #[test]
     fn formats_source_diagnostic_with_line_and_caret() {

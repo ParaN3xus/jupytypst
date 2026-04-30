@@ -6,9 +6,12 @@ use reedline::{
     PromptHistorySearchStatus, Reedline, ReedlineEvent, Signal, ValidationResult, Validator,
     default_emacs_keybindings,
 };
-use typsess::{InputStatus, PageSetup, RenderMode, TypstReplSession, classify_input};
+use scraper::{Html, Selector};
+use typsess::{
+    ExecutionOutput, InputStatus, PageSetup, RenderMode, TypstReplSession, classify_input,
+};
 
-use crate::output::{execution_output_to_cli_html, format_diagnostics, format_diagnostics_rich};
+use crate::output::{format_diagnostics, format_diagnostics_rich};
 
 const REPL_PROMPT_LABEL: &str = "typst";
 
@@ -105,14 +108,45 @@ fn execute_buffer(session: &mut TypstReplSession, buffer: &str, full_html: bool)
     for warning in result.warnings {
         eprintln!("{}", warning.message);
     }
-    let html = match execution_output_to_cli_html(result.output, full_html) {
-        Ok(html) => html,
+    let output = match execution_output_to_string(result.output, full_html) {
+        Ok(output) => output,
         Err(diagnostics) => {
             eprintln!("{}", format_diagnostics_rich(diagnostics, buffer));
             return;
         }
     };
-    println!("{html}");
+    println!("{output}");
+}
+
+fn execution_output_to_string(
+    output: ExecutionOutput,
+    full_html: bool,
+) -> Result<String, ecow::EcoVec<typst::diag::SourceDiagnostic>> {
+    match output {
+        ExecutionOutput::Paged(document) => Ok(document
+            .pages
+            .iter()
+            .map(typst_svg::svg)
+            .collect::<Vec<_>>()
+            .join("\n")),
+        ExecutionOutput::Html(document) => {
+            let html = typst_html::html(&document)?;
+            if full_html {
+                Ok(html)
+            } else {
+                Ok(body_inner_html(&html).unwrap_or(html))
+            }
+        }
+    }
+}
+
+fn body_inner_html(html: &str) -> Option<String> {
+    let document = Html::parse_document(html);
+    let selector = Selector::parse("body").ok()?;
+    document
+        .select(&selector)
+        .next()
+        .map(|body| body.inner_html().trim().to_string())
 }
 
 fn print_prompt(continuation: bool) {
@@ -174,5 +208,16 @@ impl Prompt for TypstPrompt {
             "({prefix}reverse-search: {}) ",
             history_search.term
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_body_inner_html() {
+        let html = "<!DOCTYPE html><html><head></head><body><p>test</p></body></html>";
+        assert_eq!(body_inner_html(html).unwrap(), "<p>test</p>");
     }
 }
