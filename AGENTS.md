@@ -53,8 +53,8 @@ reusable `typsess` library crate for stateful Typst code-mode execution.
 - Persist Typst introspection state by carrying forward invisible
   `state`/`counter` update content between cells. Do not carry forward visible
   cell content.
-- Anonymous top-level `show: ...` rules are cell-local because they cannot be
-  replayed safely as persistent style recipes; emit a user-visible warning.
+- Anonymous top-level `show: ...` rules persist between cells like other
+  top-level show rules.
 - Page setup must reset for each rendered cell. Do not persist transient page
   sizing fields: `page.paper`, `page.width`, and `page.height`. Other page
   fields, such as `fill`, may persist.
