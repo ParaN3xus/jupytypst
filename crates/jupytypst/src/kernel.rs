@@ -16,7 +16,7 @@ use runtimelib::{
 use uuid::Uuid;
 
 use crate::cell::parse_cell;
-use crate::output::{execution_output_to_html, format_diagnostics};
+use crate::output::{execution_output_to_html, format_diagnostics, format_diagnostics_rich};
 use crate::session::create_session;
 use crate::{CODE_DISPLAY_NAME, MARKUP_DISPLAY_NAME};
 use typsess::{
@@ -257,7 +257,7 @@ impl KernelServer {
             Ok(cell) => self
                 .typst
                 .execute_with_mode(&cell.body, cell.mode)
-                .map_err(format_diagnostics),
+                .map_err(|diagnostics| format_diagnostics_rich(diagnostics, &cell.body)),
             Err(error) => Err(error.to_string()),
         };
 
@@ -282,10 +282,11 @@ impl KernelServer {
             }
             Err(error) => {
                 let evalue = error.to_string();
+                let traceback = traceback_lines(&evalue);
                 let error_output = ErrorOutput {
                     ename: "TypstError".to_string(),
                     evalue: evalue.clone(),
-                    traceback: vec![evalue.clone()],
+                    traceback: traceback.clone(),
                 };
                 self.iopub.send(error_output.as_child_of(parent)).await?;
                 ExecuteReply {
@@ -296,7 +297,7 @@ impl KernelServer {
                     error: Some(Box::new(ReplyError {
                         ename: "TypstError".to_string(),
                         evalue,
-                        traceback: vec![],
+                        traceback,
                     })),
                 }
             }
@@ -324,6 +325,15 @@ impl KernelServer {
             .send(DisplayData::new(media).as_child_of(parent))
             .await?;
         Ok(())
+    }
+}
+
+fn traceback_lines(message: &str) -> Vec<String> {
+    let lines = message.lines().map(str::to_string).collect::<Vec<_>>();
+    if lines.is_empty() {
+        vec![message.to_string()]
+    } else {
+        lines
     }
 }
 
