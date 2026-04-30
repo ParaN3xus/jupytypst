@@ -77,12 +77,19 @@ fn svg_pages_html(document: &typst::layout::PagedDocument) -> String {
 }
 
 fn to_codespan_diagnostic(diagnostic: SourceDiagnostic) -> Diagnostic<()> {
-    let labels = diagnostic
+    let mut labels = diagnostic
         .span
         .range()
         .map(|range| Label::primary((), range))
         .into_iter()
-        .collect();
+        .collect::<Vec<_>>();
+    labels.extend(diagnostic.trace.iter().filter_map(|trace| {
+        trace
+            .span
+            .range()
+            .map(|range| Label::secondary((), range).with_message(trace.v.to_string()))
+    }));
+
     let notes = diagnostic
         .hints
         .iter()
@@ -121,5 +128,38 @@ mod tests {
         assert!(formatted.contains("1 │ tests"));
         assert!(formatted.contains("^^^^^"));
         assert!(formatted.contains("  ┌─ <stdin>:1:1"));
+    }
+
+    #[test]
+    fn formats_tracepoints_as_secondary_labels() {
+        let source = "#let f() = panic()\n\n#let g() = f()\n\n#g()\n";
+        let mut diagnostic = SourceDiagnostic::error(
+            Span::from_range(
+                typst::syntax::FileId::new(None, VirtualPath::new("/main.typ")),
+                11..18,
+            ),
+            "panicked",
+        );
+        diagnostic.trace = eco_vec![
+            typst::syntax::Spanned::new(
+                typst::diag::Tracepoint::Call(Some("f".into())),
+                Span::from_range(
+                    typst::syntax::FileId::new(None, VirtualPath::new("/main.typ")),
+                    31..34,
+                ),
+            ),
+            typst::syntax::Spanned::new(
+                typst::diag::Tracepoint::Call(Some("g".into())),
+                Span::from_range(
+                    typst::syntax::FileId::new(None, VirtualPath::new("/main.typ")),
+                    39..42,
+                ),
+            ),
+        ];
+
+        let formatted = format_diagnostics_rich(eco_vec![diagnostic], source);
+        assert!(formatted.contains("error: panicked"));
+        assert!(formatted.contains("error occurred in this call of function `f`"));
+        assert!(formatted.contains("error occurred in this call of function `g`"));
     }
 }
