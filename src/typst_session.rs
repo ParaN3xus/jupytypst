@@ -1,14 +1,12 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
-use comemo::Track;
 use ecow::{EcoVec, eco_format};
 use parking_lot::Mutex;
 use typst::diag::{FileError, FileResult, SourceDiagnostic};
-use typst::engine::Sink;
-use typst::foundations::{Bytes, Datetime, Repr, Scope};
+use typst::foundations::{Bytes, Datetime};
 use typst::layout::{Abs, PagedDocument};
-use typst::syntax::{FileId, Source, SyntaxMode, VirtualPath};
+use typst::syntax::{FileId, Source, VirtualPath};
 use typst::text::{Font, FontBook};
 use typst::utils::LazyHash;
 use typst::{Feature, Features, Library, LibraryExt, World};
@@ -16,7 +14,6 @@ use typst_kit::fonts::{FontSlot, Fonts};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
-    Eval,
     Svg,
     Html,
 }
@@ -55,7 +52,6 @@ pub struct ParsedCell {
 
 #[derive(Debug)]
 pub enum ExecutionOutput {
-    PlainText(String),
     Svg(String),
     Html(String),
 }
@@ -74,7 +70,7 @@ impl TypstSession {
         let mut searcher = Fonts::searcher();
         let fonts = searcher.search();
         Self {
-            mode: Mode::Eval,
+            mode: Mode::Svg,
             page_setup,
             context_code: Vec::new(),
             root: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
@@ -86,30 +82,12 @@ impl TypstSession {
         let cell = parse_cell(source, self.mode)?;
         self.mode = cell.mode;
         let output = match cell.mode {
-            Mode::Eval => self.eval(&cell.body)?,
             Mode::Svg => self.render_svg(&cell.body)?,
             Mode::Html => self.render_html(&cell.body)?,
         };
         self.context_code
             .extend(extract_context_code(&cell.body, cell.mode));
         Ok(output)
-    }
-
-    fn eval(&self, code: &str) -> Result<ExecutionOutput> {
-        let full_code = join_code(&self.context_code, code);
-        let world = SessionWorld::new(&self.root, "", self.fonts.clone_for_world());
-        let mut sink = Sink::new();
-        let value = typst_eval::eval_string(
-            &typst::ROUTINES,
-            (&world as &dyn World).track(),
-            sink.track_mut(),
-            &full_code,
-            typst::syntax::Span::detached(),
-            SyntaxMode::Code,
-            Scope::new(),
-        )
-        .map_err(format_diagnostics)?;
-        Ok(ExecutionOutput::PlainText(value.repr().to_string()))
     }
 
     fn render_svg(&self, markup: &str) -> Result<ExecutionOutput> {
@@ -186,7 +164,9 @@ fn parse_directive(rest: &str) -> Result<Mode> {
         return Err(anyhow!("unsupported jupytypst directive `{rest}`"));
     };
     match value {
-        "eval" => Ok(Mode::Eval),
+        "eval" => Err(anyhow!(
+            "jupytypst no longer supports mode=eval; use mode=svg or mode=html"
+        )),
         "svg" => Ok(Mode::Svg),
         "html" => Ok(Mode::Html),
         other => Err(anyhow!("unsupported jupytypst mode `{other}`")),
@@ -199,7 +179,6 @@ fn extract_context_code(source: &str, mode: Mode) -> Vec<String> {
         .filter_map(|line| {
             let trimmed = line.trim();
             let code = match mode {
-                Mode::Eval => trimmed,
                 Mode::Svg | Mode::Html => trimmed.strip_prefix('#')?.trim_start(),
             };
             is_context_statement(code).then(|| code.to_string())
@@ -211,15 +190,6 @@ fn is_context_statement(code: &str) -> bool {
     ["let ", "set ", "show ", "import ", "include "]
         .iter()
         .any(|prefix| code.starts_with(prefix))
-}
-
-fn join_code(context: &[String], code: &str) -> String {
-    let mut full = context.join("\n");
-    if !full.is_empty() {
-        full.push('\n');
-    }
-    full.push_str(code);
-    full
 }
 
 fn format_diagnostics(diagnostics: EcoVec<SourceDiagnostic>) -> anyhow::Error {
@@ -335,15 +305,15 @@ mod tests {
 
     #[test]
     fn parses_comment_mode_directive() {
-        let cell = parse_cell("// jupytypst: mode=svg\n= Test", Mode::Eval).unwrap();
+        let cell = parse_cell("// jupytypst: mode=svg\n= Test", Mode::Svg).unwrap();
         assert_eq!(cell.mode, Mode::Svg);
         assert_eq!(cell.body, "= Test");
     }
 
     #[test]
-    fn extracts_eval_context() {
-        let context = extract_context_code("let f(a, b) = a + b\nf(1, 2)", Mode::Eval);
-        assert_eq!(context, vec!["let f(a, b) = a + b"]);
+    fn rejects_eval_mode() {
+        let error = parse_cell("// jupytypst: mode=eval\n1 + 2", Mode::Svg).unwrap_err();
+        assert!(error.to_string().contains("mode=eval"));
     }
 
     #[test]
@@ -353,16 +323,9 @@ mod tests {
     }
 
     #[test]
-    fn eval_mode_preserves_definitions() {
-        let mut session = TypstSession::default();
-        let first = session.execute("let f(a, b) = a + b").unwrap();
-        assert!(matches!(first, ExecutionOutput::PlainText(_)));
-
-        let second = session.execute("f(1, 2)").unwrap();
-        match second {
-            ExecutionOutput::PlainText(text) => assert_eq!(text, "3"),
-            other => panic!("unexpected output: {other:?}"),
-        }
+    fn default_mode_is_svg() {
+        let cell = parse_cell("= Test", Mode::Svg).unwrap();
+        assert_eq!(cell.mode, Mode::Svg);
     }
 
     #[test]
