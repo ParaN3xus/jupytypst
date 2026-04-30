@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -111,9 +112,9 @@ fn write_kernel_json(spec_dir: &Path, binary: &Path) -> Result<()> {
         ],
         display_name: DISPLAY_NAME.to_string(),
         language: "typst".to_string(),
-        metadata: None,
+        metadata: Some(HashMap::new()),
         interrupt_mode: Some("message".to_string()),
-        env: None,
+        env: Some(HashMap::new()),
     };
 
     let json = serde_json::to_string_pretty(&kernelspec)?;
