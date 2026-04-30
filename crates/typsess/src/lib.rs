@@ -160,7 +160,6 @@ impl TypstReplSession {
 
         let mut sink = Sink::new();
         let mut captured_styles = Styles::new();
-        let mut warnings = eco_vec![];
         let world = self.world.html_task();
         let (value, new_scope, sink_warnings) = {
             let introspector = Introspector::default();
@@ -182,7 +181,6 @@ impl TypstReplSession {
                 &mut root.cast::<ast::Code>().unwrap().exprs(),
                 style_capture,
                 &mut captured_styles,
-                &mut warnings,
             )?;
             if let Some(flow) = vm.flow {
                 return Err(eco_vec![flow.forbidden()]);
@@ -192,13 +190,11 @@ impl TypstReplSession {
             (value, new_scope, sink.warnings())
         };
 
-        warnings.extend(sink_warnings);
-
         Ok(EvaluatedSource {
             value,
             scope: new_scope,
             captured_styles,
-            warnings,
+            warnings: sink_warnings,
         })
     }
 
@@ -257,13 +253,11 @@ fn eval_code_capture<'a>(
     exprs: &mut impl Iterator<Item = ast::Expr<'a>>,
     style_capture: StyleCapture,
     captured_styles: &mut Styles,
-    warnings: &mut EcoVec<SourceDiagnostic>,
 ) -> typst::diag::SourceResult<Value> {
     let flow = vm.flow.take();
     let mut output = Value::None;
 
     while let Some(expr) = exprs.next() {
-        let span = expr.span();
         let value = match expr {
             ast::Expr::SetRule(set) => {
                 let styles = set.eval(vm)?;
@@ -276,40 +270,32 @@ fn eval_code_capture<'a>(
                 if vm.flow.is_some() {
                     break;
                 }
-                let tail = eval_code_capture(vm, exprs, style_capture, captured_styles, warnings)?
-                    .display();
+                let tail = eval_code_capture(vm, exprs, style_capture, captured_styles)?.display();
                 Value::Content(tail.styled_with_map(styles))
             }
             ast::Expr::ShowRule(show) => {
                 let recipe = show.eval(vm)?;
-                let is_anonymous = recipe.selector().is_none();
-                match style_capture {
-                    StyleCapture::Local => {
-                        captured_styles.apply(Style::from(recipe.clone()).into());
-                    }
-                    StyleCapture::Persistent => {
-                        if is_anonymous {
-                            warnings.push(SourceDiagnostic::warning(
-                                span,
-                                "anonymous `show: ...` rules are cell-local and are not persisted",
-                            ));
-                        } else {
-                            captured_styles.apply(Style::from(recipe.clone()).into());
-                        }
-                    }
-                }
+                captured_styles.apply(Style::from(recipe.clone()).into());
                 if vm.flow.is_some() {
                     break;
                 }
-                let tail = eval_code_capture(vm, exprs, style_capture, captured_styles, warnings)?
-                    .display();
+                let tail = eval_code_capture(vm, exprs, style_capture, captured_styles)?.display();
                 Value::Content(tail.styled_with_recipe(&mut vm.engine, vm.context, recipe)?)
             }
             ast::Expr::CodeBlock(block) => block.eval(vm)?,
-            _ => expr.eval(vm)?,
+            _ => {
+                let span = expr.span();
+                let value = expr.eval(vm)?;
+                output = ops::join(output, value).at(span)?;
+
+                if vm.flow.is_some() {
+                    break;
+                }
+                continue;
+            }
         };
 
-        output = ops::join(output, value).at(span)?;
+        output = ops::join(output, value).at(expr.span())?;
 
         if vm.flow.is_some() {
             break;

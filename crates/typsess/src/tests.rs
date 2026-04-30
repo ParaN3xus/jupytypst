@@ -121,15 +121,10 @@ fn page_fill_persists_but_page_width_does_not() {
 }
 
 #[test]
-fn anonymous_show_rules_warn_and_do_not_persist() {
+fn anonymous_show_rules_persist_between_cells() {
     let mut session = svg_session();
-    let result = session.execute("show: it => emph(it)\n[First]").unwrap();
-    assert!(
-        result
-            .warnings
-            .iter()
-            .any(|warning| warning.message.contains("anonymous `show: ...`"))
-    );
+    session.execute("show: it => emph(it)\n[First]").unwrap();
+    assert!(session.styles.iter().any(|style| style.recipe().is_some()));
     assert!(svg_output(session.execute("[Second]").unwrap()).contains("<svg"));
 }
 
