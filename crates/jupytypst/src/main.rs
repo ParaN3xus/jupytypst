@@ -49,6 +49,9 @@ struct ReplArgs {
     /// Render mode for terminal output.
     #[arg(long, value_enum, default_value_t = CliRenderMode::Html)]
     mode: CliRenderMode,
+    /// Print complete HTML documents instead of only the body contents.
+    #[arg(long)]
+    full_html: bool,
     /// Page setup for rendered cells. Omit for `set page(width: auto, height: auto, margin: 16pt)`, use `none` to disable, or pass Typst code.
     #[arg(long)]
     page_setup: Option<String>,
@@ -109,7 +112,7 @@ async fn start_kernel(args: StartArgs) -> Result<()> {
 
 fn start_repl(args: ReplArgs) -> Result<()> {
     let page_setup = parse_page_setup(args.page_setup)?;
-    repl::run(args.mode.into(), page_setup)
+    repl::run(args.mode.into(), page_setup, args.full_html)
 }
 
 fn parse_page_setup(page_setup: Option<String>) -> Result<PageSetup> {
