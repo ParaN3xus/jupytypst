@@ -3,6 +3,7 @@
 /local
 
 # Local Python/Jupyter helper environment.
+/.venv
 /.python-version
 /pyproject.toml
 /uv.lock
