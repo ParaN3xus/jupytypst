@@ -1,4 +1,13 @@
 use super::*;
+use std::ops::ControlFlow;
+use std::sync::Arc;
+
+use ecow::eco_vec;
+use typst::foundations::{Element, Selector};
+use typst::introspection::{Counter, State};
+use typst::layout::PageElem;
+
+const DEFAULT_TEST_PAGE_SETUP: &str = "set page(width: auto, height: auto, margin: 16pt)";
 
 #[test]
 fn top_level_text_set_persists_between_cells() {
@@ -47,7 +56,12 @@ fn page_setup_default_initializes_persistent_styles() {
 #[test]
 fn default_page_setup_controls_rendered_svg_size() {
     let mut default_session = svg_session();
-    let mut no_setup_session = TypstReplSession::new(RenderMode::Svg, PageSetup::None).unwrap();
+    let mut no_setup_session = test_session(
+        RenderMode::Svg,
+        SourceMode::Markup,
+        "",
+        WorldOptions::default(),
+    );
 
     let default_svg = svg_output(default_session.execute("[x]").unwrap());
     let no_setup_svg = svg_output(no_setup_session.execute("[x]").unwrap());
@@ -69,7 +83,12 @@ fn default_page_setup_controls_rendered_svg_size() {
 
 #[test]
 fn page_setup_none_does_not_initialize_page_styles() {
-    let session = TypstReplSession::new(RenderMode::Svg, PageSetup::None).unwrap();
+    let session = test_session(
+        RenderMode::Svg,
+        SourceMode::Markup,
+        "",
+        WorldOptions::default(),
+    );
     assert!(!session_has_style_for(&session, "page", "width"));
     assert!(!session_has_style_for(&session, "page", "height"));
     assert!(!session_has_style_for(&session, "page", "margin"));
@@ -77,11 +96,12 @@ fn page_setup_none_does_not_initialize_page_styles() {
 
 #[test]
 fn page_setup_custom_initializes_persistent_styles() {
-    let session = TypstReplSession::new(
+    let session = test_session(
         RenderMode::Svg,
-        PageSetup::Custom("set page(fill: red)".into()),
-    )
-    .unwrap();
+        SourceMode::Markup,
+        "set page(fill: red)",
+        WorldOptions::default(),
+    );
     assert!(session_has_style_for(&session, "page", "fill"));
 }
 
@@ -204,13 +224,12 @@ fn classifies_invalid_input() {
 
 #[test]
 fn markup_mode_executes_markup_source() {
-    let mut session = TypstReplSession::new_with_options(
+    let mut session = test_session(
         RenderMode::Html,
         SourceMode::Markup,
-        PageSetup::Default,
+        DEFAULT_TEST_PAGE_SETUP,
         WorldOptions::default(),
-    )
-    .unwrap();
+    );
     let html = html_output(session.execute("Hello\n#let x = 1\n#x").unwrap());
     assert!(html.contains("Hello"));
     assert!(html.contains("1"));
@@ -218,13 +237,12 @@ fn markup_mode_executes_markup_source() {
 
 #[test]
 fn markup_mode_persists_definitions_with_hash_prefix() {
-    let mut session = TypstReplSession::new_with_options(
+    let mut session = test_session(
         RenderMode::Html,
         SourceMode::Markup,
-        PageSetup::Default,
+        DEFAULT_TEST_PAGE_SETUP,
         WorldOptions::default(),
-    )
-    .unwrap();
+    );
     session.execute("#let f(a, b) = a + b").unwrap();
     let html = html_output(session.execute("#f(1, 2)").unwrap());
     assert!(html.contains("3"));
@@ -232,7 +250,7 @@ fn markup_mode_persists_definitions_with_hash_prefix() {
 
 #[test]
 fn new_session_defaults_to_markup_mode() {
-    let mut session = TypstReplSession::new(RenderMode::Html, PageSetup::Default).unwrap();
+    let mut session = TypstReplSession::new(SessionOptions::default()).unwrap();
     let html = html_output(session.execute("Hello\n#let x = 1\n#x").unwrap());
     assert!(html.contains("Hello"));
     assert!(html.contains("1"));
@@ -240,16 +258,15 @@ fn new_session_defaults_to_markup_mode() {
 
 #[test]
 fn world_inputs_are_visible_to_sys_inputs() {
-    let mut session = TypstReplSession::new_with_options(
+    let mut session = test_session(
         RenderMode::Html,
         SourceMode::Code,
-        PageSetup::Default,
+        DEFAULT_TEST_PAGE_SETUP,
         WorldOptions {
             inputs: vec![("name".into(), "typst".into())],
             ..WorldOptions::default()
         },
-    )
-    .unwrap();
+    );
 
     let html = html_output(session.execute("sys.inputs.name").unwrap());
     assert!(html.contains("typst"));
@@ -259,16 +276,15 @@ fn world_inputs_are_visible_to_sys_inputs() {
 fn world_root_controls_relative_imports() {
     let temp_dir = tempfile::tempdir().unwrap();
     std::fs::write(temp_dir.path().join("defs.typ"), "#let value = [Imported]").unwrap();
-    let mut session = TypstReplSession::new_with_options(
+    let mut session = test_session(
         RenderMode::Html,
         SourceMode::Code,
-        PageSetup::Default,
+        DEFAULT_TEST_PAGE_SETUP,
         WorldOptions {
             root: Some(temp_dir.path().to_path_buf()),
             ..WorldOptions::default()
         },
-    )
-    .unwrap();
+    );
 
     let html = html_output(
         session
@@ -295,27 +311,97 @@ fn code_block_errors_keep_inner_expression_span() {
 }
 
 fn svg_session() -> TypstReplSession {
-    TypstReplSession::new(RenderMode::Svg, PageSetup::Default).unwrap()
+    test_session(
+        RenderMode::Svg,
+        SourceMode::Markup,
+        DEFAULT_TEST_PAGE_SETUP,
+        WorldOptions::default(),
+    )
 }
 
 fn code_svg_session() -> TypstReplSession {
-    TypstReplSession::new_with_options(
+    test_session(
         RenderMode::Svg,
         SourceMode::Code,
-        PageSetup::Default,
+        DEFAULT_TEST_PAGE_SETUP,
         WorldOptions::default(),
     )
-    .unwrap()
 }
 
 fn code_html_session() -> TypstReplSession {
-    TypstReplSession::new_with_options(
+    test_session(
         RenderMode::Html,
         SourceMode::Code,
-        PageSetup::Default,
+        DEFAULT_TEST_PAGE_SETUP,
         WorldOptions::default(),
     )
+}
+
+fn test_session(
+    render_mode: RenderMode,
+    source_mode: SourceMode,
+    page_setup: &'static str,
+    world_options: WorldOptions,
+) -> TypstReplSession {
+    let state = initial_test_state(page_setup, world_options.clone());
+    TypstReplSession::new(SessionOptions {
+        render_mode,
+        source_mode,
+        world_options,
+        state,
+        persistence: test_persistence(),
+    })
     .unwrap()
+}
+
+fn initial_test_state(page_setup: &'static str, world_options: WorldOptions) -> SessionState {
+    let mut session = TypstReplSession::new(SessionOptions {
+        world_options,
+        ..SessionOptions::default()
+    })
+    .unwrap();
+    if !page_setup.is_empty() {
+        session.apply_source(page_setup, SourceMode::Code).unwrap();
+    }
+    session.into_state()
+}
+
+fn test_persistence() -> SessionPersistence {
+    SessionPersistence {
+        filter_styles: Arc::new(filter_test_persistent_styles),
+        collect_introspection_updates: Arc::new(collect_test_introspection_updates),
+    }
+}
+
+fn filter_test_persistent_styles(styles: Styles) -> Styles {
+    styles
+        .into_iter()
+        .filter(|style| {
+            style
+                .property()
+                .is_none_or(|property| !is_test_transient_page_property(property))
+        })
+        .collect()
+}
+
+fn is_test_transient_page_property(property: &typst::foundations::Property) -> bool {
+    let page = Element::of::<PageElem>();
+    ["paper", "width", "height"]
+        .into_iter()
+        .filter_map(|field| page.field_id(field))
+        .any(|id| property.is(page, id))
+}
+
+fn collect_test_introspection_updates(content: &Content) -> Vec<Content> {
+    let selector = Selector::Or(eco_vec![State::select_any(), Counter::select_any()]);
+    let mut updates = Vec::new();
+    let _ = content.traverse(&mut |element| {
+        if selector.matches(&element, None) {
+            updates.push(element);
+        }
+        ControlFlow::<()>::Continue(())
+    });
+    updates
 }
 
 fn svg_output(result: ExecutionResult) -> String {

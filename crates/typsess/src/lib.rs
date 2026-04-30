@@ -2,7 +2,6 @@ use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::anyhow;
 use comemo::{Constraint, Track};
 use ecow::{EcoVec, eco_vec};
 use tinymist_vfs::ImmutDict;
@@ -25,11 +24,8 @@ use typst::utils::LazyHash;
 use typst_eval::{Eval, Vm};
 
 mod input;
-mod persist;
 
 pub use input::{InputStatus, classify_input};
-
-use persist::{collect_introspection_updates, filter_persistent_styles};
 
 const CODE_WRAPPER_PREFIX: &str = "#{\n";
 const CODE_WRAPPER_SUFFIX: &str = "\n}";
@@ -57,32 +53,6 @@ pub struct WorldOptions {
     pub package_cache_path: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PageSetup {
-    Default,
-    None,
-    Custom(String),
-}
-
-impl PageSetup {
-    pub fn parse(value: &str) -> anyhow::Result<Self> {
-        match value.trim() {
-            "default" => Ok(Self::Default),
-            "none" => Ok(Self::None),
-            "" => Err(anyhow!("page setup cannot be empty")),
-            custom => Ok(Self::Custom(custom.to_string())),
-        }
-    }
-
-    fn code(&self) -> Option<&str> {
-        match self {
-            Self::Default => Some("set page(width: auto, height: auto, margin: 16pt)"),
-            Self::None => None,
-            Self::Custom(code) => Some(code.as_str()),
-        }
-    }
-}
-
 #[derive(Debug)]
 pub enum ExecutionOutput {
     Paged(PagedDocument),
@@ -95,50 +65,92 @@ pub struct ExecutionResult {
     pub warnings: EcoVec<SourceDiagnostic>,
 }
 
+#[derive(Default)]
+pub struct SessionState {
+    pub scope: Scope,
+    pub styles: Styles,
+    pub introspection_updates: Vec<Content>,
+}
+
+pub type StylePersistence = Arc<dyn Fn(Styles) -> Styles + Send + Sync + 'static>;
+pub type IntrospectionPersistence = Arc<dyn Fn(&Content) -> Vec<Content> + Send + Sync + 'static>;
+
+#[derive(Clone)]
+pub struct SessionPersistence {
+    pub filter_styles: StylePersistence,
+    pub collect_introspection_updates: IntrospectionPersistence,
+}
+
+impl Default for SessionPersistence {
+    fn default() -> Self {
+        Self {
+            filter_styles: Arc::new(|styles| styles),
+            collect_introspection_updates: Arc::new(|_| Vec::new()),
+        }
+    }
+}
+
+pub struct SessionOptions {
+    pub render_mode: RenderMode,
+    pub source_mode: SourceMode,
+    pub world_options: WorldOptions,
+    pub state: SessionState,
+    pub persistence: SessionPersistence,
+}
+
+impl Default for SessionOptions {
+    fn default() -> Self {
+        Self {
+            render_mode: RenderMode::Html,
+            source_mode: SourceMode::Markup,
+            world_options: WorldOptions::default(),
+            state: SessionState::default(),
+            persistence: SessionPersistence::default(),
+        }
+    }
+}
+
 pub struct TypstReplSession {
     render_mode: RenderMode,
     source_mode: SourceMode,
     scope: Scope,
     styles: Styles,
     introspection_updates: Vec<Content>,
+    persistence: SessionPersistence,
     world: TypstSystemWorld,
 }
 
 impl TypstReplSession {
-    pub fn new(render_mode: RenderMode, page_setup: PageSetup) -> typst::diag::SourceResult<Self> {
-        Self::new_with_options(
-            render_mode,
-            SourceMode::Markup,
-            page_setup,
-            WorldOptions::default(),
-        )
-    }
-
-    pub fn new_with_world_options(
-        render_mode: RenderMode,
-        page_setup: PageSetup,
-        world_options: WorldOptions,
-    ) -> typst::diag::SourceResult<Self> {
-        Self::new_with_options(render_mode, SourceMode::Markup, page_setup, world_options)
-    }
-
-    pub fn new_with_options(
-        render_mode: RenderMode,
-        source_mode: SourceMode,
-        page_setup: PageSetup,
-        world_options: WorldOptions,
-    ) -> typst::diag::SourceResult<Self> {
-        let world = create_world(&world_options)?;
-        let mut session = Self {
-            render_mode,
-            source_mode,
-            scope: Scope::new(),
-            styles: Styles::new(),
-            introspection_updates: Vec::new(),
+    pub fn new(options: SessionOptions) -> typst::diag::SourceResult<Self> {
+        let world = create_world(&options.world_options)?;
+        Ok(Self {
+            render_mode: options.render_mode,
+            source_mode: options.source_mode,
+            scope: options.state.scope,
+            styles: options.state.styles,
+            introspection_updates: options.state.introspection_updates,
+            persistence: options.persistence,
             world,
-        };
-        session.initialize_page_setup(page_setup)?;
-        Ok(session)
+        })
+    }
+
+    pub fn into_state(self) -> SessionState {
+        SessionState {
+            scope: self.scope,
+            styles: self.styles,
+            introspection_updates: self.introspection_updates,
+        }
+    }
+
+    pub fn apply_source(
+        &mut self,
+        source: &str,
+        source_mode: SourceMode,
+    ) -> typst::diag::SourceResult<()> {
+        let evaluated = self.evaluate_source(source, source_mode, &|styles| styles)?;
+        self.scope = evaluated.scope;
+        self.styles.apply(evaluated.captured_styles);
+        Ok(())
     }
 
     pub fn execute(&mut self, source: &str) -> typst::diag::SourceResult<ExecutionResult> {
@@ -157,24 +169,18 @@ impl TypstReplSession {
             RenderMode::Html => self.render_html(content)?,
         };
         self.introspection_updates
-            .extend(collect_introspection_updates(&evaluated.content));
+            .extend((self.persistence.collect_introspection_updates)(
+                &evaluated.content,
+            ));
         Ok(ExecutionResult {
             output,
             warnings: evaluated.warnings,
         })
     }
 
-    fn initialize_page_setup(&mut self, page_setup: PageSetup) -> typst::diag::SourceResult<()> {
-        if let Some(page_setup) = page_setup.code() {
-            let evaluated =
-                self.evaluate_source(page_setup, SourceMode::Code, StyleCapture::Local)?;
-            self.styles.apply(evaluated.captured_styles);
-        }
-        Ok(())
-    }
-
     fn evaluate_code(&mut self, code: &str) -> typst::diag::SourceResult<EvaluatedCell> {
-        let evaluated = self.evaluate_source(code, self.source_mode, StyleCapture::Persistent)?;
+        let filter_styles = Arc::clone(&self.persistence.filter_styles);
+        let evaluated = self.evaluate_source(code, self.source_mode, filter_styles.as_ref())?;
         self.scope = evaluated.scope;
         self.styles.apply(evaluated.captured_styles);
 
@@ -193,7 +199,7 @@ impl TypstReplSession {
         &mut self,
         source: &str,
         source_mode: SourceMode,
-        style_capture: StyleCapture,
+        filter_styles: &dyn Fn(Styles) -> Styles,
     ) -> typst::diag::SourceResult<EvaluatedSource> {
         self.world
             .map_shadow_by_id(self.world.main(), Bytes::from_string(source.to_string()))
@@ -237,7 +243,7 @@ impl TypstReplSession {
                 &mut vm,
                 root,
                 source_mode,
-                style_capture,
+                filter_styles,
                 &mut captured_styles,
             ) {
                 Ok(value) => value,
@@ -300,7 +306,7 @@ impl TypstReplSession {
 
 impl Default for TypstReplSession {
     fn default() -> Self {
-        Self::new(RenderMode::Html, PageSetup::Default).expect("default page setup should be valid")
+        Self::new(SessionOptions::default()).expect("default session options should be valid")
     }
 }
 
@@ -316,16 +322,10 @@ struct EvaluatedSource {
     warnings: EcoVec<SourceDiagnostic>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StyleCapture {
-    Local,
-    Persistent,
-}
-
 fn eval_code_capture<'a>(
     vm: &mut Vm,
     exprs: &mut impl Iterator<Item = ast::Expr<'a>>,
-    style_capture: StyleCapture,
+    filter_styles: &dyn Fn(Styles) -> Styles,
     captured_styles: &mut Styles,
 ) -> typst::diag::SourceResult<Value> {
     let flow = vm.flow.take();
@@ -335,16 +335,11 @@ fn eval_code_capture<'a>(
         let value = match expr {
             ast::Expr::SetRule(set) => {
                 let styles = set.eval(vm)?;
-                match style_capture {
-                    StyleCapture::Local => captured_styles.apply(styles.clone()),
-                    StyleCapture::Persistent => {
-                        captured_styles.apply(filter_persistent_styles(styles.clone()));
-                    }
-                }
+                captured_styles.apply(filter_styles(styles.clone()));
                 if vm.flow.is_some() {
                     break;
                 }
-                let tail = eval_code_capture(vm, exprs, style_capture, captured_styles)?.display();
+                let tail = eval_code_capture(vm, exprs, filter_styles, captured_styles)?.display();
                 Value::Content(tail.styled_with_map(styles))
             }
             ast::Expr::ShowRule(show) => {
@@ -353,11 +348,11 @@ fn eval_code_capture<'a>(
                 if vm.flow.is_some() {
                     break;
                 }
-                let tail = eval_code_capture(vm, exprs, style_capture, captured_styles)?.display();
+                let tail = eval_code_capture(vm, exprs, filter_styles, captured_styles)?.display();
                 Value::Content(tail.styled_with_recipe(&mut vm.engine, vm.context, recipe)?)
             }
             ast::Expr::CodeBlock(block) => {
-                eval_code_block_capture(vm, block, style_capture, captured_styles)?
+                eval_code_block_capture(vm, block, filter_styles, captured_styles)?
             }
             _ => {
                 let span = expr.span();
@@ -388,7 +383,7 @@ fn eval_code_capture<'a>(
 fn eval_markup_capture<'a>(
     vm: &mut Vm,
     exprs: &mut impl Iterator<Item = ast::Expr<'a>>,
-    style_capture: StyleCapture,
+    filter_styles: &dyn Fn(Styles) -> Styles,
     captured_styles: &mut Styles,
 ) -> typst::diag::SourceResult<Content> {
     let flow = vm.flow.take();
@@ -398,17 +393,12 @@ fn eval_markup_capture<'a>(
         match expr {
             ast::Expr::SetRule(set) => {
                 let styles = set.eval(vm)?;
-                match style_capture {
-                    StyleCapture::Local => captured_styles.apply(styles.clone()),
-                    StyleCapture::Persistent => {
-                        captured_styles.apply(filter_persistent_styles(styles.clone()));
-                    }
-                }
+                captured_styles.apply(filter_styles(styles.clone()));
                 if vm.flow.is_some() {
                     break;
                 }
                 output.push(
-                    eval_markup_capture(vm, exprs, style_capture, captured_styles)?
+                    eval_markup_capture(vm, exprs, filter_styles, captured_styles)?
                         .styled_with_map(styles),
                 );
             }
@@ -418,7 +408,7 @@ fn eval_markup_capture<'a>(
                 if vm.flow.is_some() {
                     break;
                 }
-                let tail = eval_markup_capture(vm, exprs, style_capture, captured_styles)?;
+                let tail = eval_markup_capture(vm, exprs, filter_styles, captured_styles)?;
                 output.push(tail.styled_with_recipe(&mut vm.engine, vm.context, recipe)?);
             }
             expr => {
@@ -445,13 +435,13 @@ fn eval_source_capture(
     vm: &mut Vm,
     root: &typst::syntax::SyntaxNode,
     source_mode: SourceMode,
-    style_capture: StyleCapture,
+    filter_styles: &dyn Fn(Styles) -> Styles,
     captured_styles: &mut Styles,
 ) -> typst::diag::SourceResult<Value> {
     match source_mode {
         SourceMode::Code => {
             let code = wrapped_code_body(root)?;
-            eval_code_capture(vm, &mut code.exprs(), style_capture, captured_styles)
+            eval_code_capture(vm, &mut code.exprs(), filter_styles, captured_styles)
         }
         SourceMode::Markup => {
             let markup = root
@@ -460,7 +450,7 @@ fn eval_source_capture(
             Ok(Value::Content(eval_markup_capture(
                 vm,
                 &mut markup.exprs(),
-                style_capture,
+                filter_styles,
                 captured_styles,
             )?))
         }
@@ -470,14 +460,14 @@ fn eval_source_capture(
 fn eval_code_block_capture(
     vm: &mut Vm,
     block: ast::CodeBlock,
-    style_capture: StyleCapture,
+    filter_styles: &dyn Fn(Styles) -> Styles,
     captured_styles: &mut Styles,
 ) -> typst::diag::SourceResult<Value> {
     vm.scopes.enter();
     let output = eval_code_capture(
         vm,
         &mut block.body().exprs(),
-        style_capture,
+        filter_styles,
         captured_styles,
     );
     vm.scopes.exit();

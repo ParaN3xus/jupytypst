@@ -17,10 +17,11 @@ use uuid::Uuid;
 
 use crate::cell::parse_cell;
 use crate::output::{execution_output_to_html, format_diagnostics};
+use crate::session::create_session;
 use crate::{CODE_DISPLAY_NAME, MARKUP_DISPLAY_NAME};
 use typsess::{
-    ExecutionOutput, InputStatus, PageSetup, RenderMode, SourceMode, TypstReplSession,
-    WorldOptions, classify_input,
+    ExecutionOutput, InputStatus, RenderMode, SourceMode, TypstReplSession, WorldOptions,
+    classify_input,
 };
 
 pub(crate) const JUPYTER_PROTOCOL_VERSION: &str = "5.3";
@@ -38,7 +39,6 @@ pub async fn run(
         .with_context(|| format!("failed to read {}", connection_file.display()))?;
     let connection_info =
         serde_json::from_slice(&bytes).context("failed to parse connection file")?;
-    let page_setup = PageSetup::parse(&page_setup)?;
     KernelServer::run(
         connection_info,
         page_setup,
@@ -61,7 +61,7 @@ struct KernelServer {
 impl KernelServer {
     async fn run(
         connection_info: jupyter_protocol::ConnectionInfo,
-        page_setup: PageSetup,
+        page_setup: String,
         default_mode: RenderMode,
         source_mode: SourceMode,
         world_options: WorldOptions,
@@ -107,13 +107,8 @@ impl KernelServer {
             execution_count: ExecutionCount::new(0),
             iopub,
             shell: shell_writer,
-            typst: TypstReplSession::new_with_options(
-                default_mode,
-                source_mode,
-                page_setup,
-                world_options,
-            )
-            .map_err(|diagnostics| anyhow!(format_diagnostics(diagnostics)))?,
+            typst: create_session(default_mode, source_mode, page_setup, world_options)
+                .map_err(|diagnostics| anyhow!(format_diagnostics(diagnostics)))?,
             default_mode,
             source_mode,
         };

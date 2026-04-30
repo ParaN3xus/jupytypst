@@ -7,18 +7,21 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use jupyter_protocol::JupyterKernelspec;
 use tempfile::TempDir;
-use typsess::{PageSetup, RenderMode, SourceMode, WorldOptions};
+use typsess::{RenderMode, SourceMode, WorldOptions};
 
 mod cell;
 mod kernel;
 mod output;
+mod persist;
 mod repl;
+mod session;
 
 const CODE_KERNEL_NAME: &str = "jupytypst-code";
 const MARKUP_KERNEL_NAME: &str = "jupytypst-markup";
 const CODE_DISPLAY_NAME: &str = "Typst (Code Mode)";
 const MARKUP_DISPLAY_NAME: &str = "Typst";
 const ENV_PATH_SEP: char = if cfg!(windows) { ';' } else { ':' };
+const DEFAULT_PAGE_SETUP: &str = "set page(width: auto, height: auto, margin: 16pt)";
 
 #[derive(Debug, Parser)]
 #[command(author, version, about)]
@@ -42,9 +45,9 @@ struct StartArgs {
     /// Path to the Jupyter connection file.
     #[arg(long = "connection-file")]
     connection_file: PathBuf,
-    /// Page setup injected before each rendered cell. Omit for `set page(width: auto, height: auto, margin: 16pt)`, use `none` to disable, or pass Typst code.
-    #[arg(long)]
-    page_setup: Option<String>,
+    /// Page setup source applied at startup. Omit for `set page(width: auto, height: auto, margin: 16pt)`, or pass an empty string to disable.
+    #[arg(long, default_value = DEFAULT_PAGE_SETUP)]
+    page_setup: String,
     /// The format of rendered kernel output.
     #[arg(short = 'f', long = "format", value_enum, default_value_t = CliOutputFormat::Svg)]
     format: CliOutputFormat,
@@ -66,9 +69,9 @@ struct ReplArgs {
     /// Print complete HTML documents instead of only the body contents.
     #[arg(long)]
     full_html: bool,
-    /// Page setup for rendered cells. Omit for `set page(width: auto, height: auto, margin: 16pt)`, use `none` to disable, or pass Typst code.
-    #[arg(long)]
-    page_setup: Option<String>,
+    /// Page setup source applied at startup. Omit for `set page(width: auto, height: auto, margin: 16pt)`, or pass an empty string to disable.
+    #[arg(long, default_value = DEFAULT_PAGE_SETUP)]
+    page_setup: String,
     #[command(flatten)]
     world: WorldArgs,
 }
@@ -221,7 +224,7 @@ async fn main() -> Result<()> {
 async fn start_kernel(args: StartArgs) -> Result<()> {
     kernel::run(
         args.connection_file,
-        args.page_setup.unwrap_or_else(|| "default".to_string()),
+        args.page_setup,
         args.format.try_into()?,
         args.mode.into(),
         args.world.into(),
@@ -230,18 +233,13 @@ async fn start_kernel(args: StartArgs) -> Result<()> {
 }
 
 fn start_repl(args: ReplArgs) -> Result<()> {
-    let page_setup = parse_page_setup(args.page_setup)?;
     repl::run(
         args.format.try_into()?,
         args.mode.into(),
-        page_setup,
+        args.page_setup,
         args.full_html,
         args.world.into(),
     )
-}
-
-fn parse_page_setup(page_setup: Option<String>) -> Result<PageSetup> {
-    PageSetup::parse(page_setup.as_deref().unwrap_or("default"))
 }
 
 fn parse_input_pair(raw: &str) -> Result<(String, String), String> {

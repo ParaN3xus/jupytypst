@@ -5,7 +5,7 @@ use typst::foundations::{Content, Element, Selector, Styles};
 use typst::introspection::{Counter, State};
 use typst::layout::PageElem;
 
-pub(crate) fn filter_persistent_styles(styles: Styles) -> Styles {
+pub fn filter_persistent_styles(styles: Styles) -> Styles {
     styles
         .into_iter()
         .filter(|style| {
@@ -24,7 +24,7 @@ fn is_transient_page_property(property: &typst::foundations::Property) -> bool {
         .any(|id| property.is(page, id))
 }
 
-pub(crate) fn collect_introspection_updates(content: &Content) -> Vec<Content> {
+pub fn collect_introspection_updates(content: &Content) -> Vec<Content> {
     let selector = Selector::Or(eco_vec![State::select_any(), Counter::select_any()]);
     let mut updates = Vec::new();
     let _ = content.traverse(&mut |element| {

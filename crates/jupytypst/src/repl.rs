@@ -8,24 +8,24 @@ use reedline::{
 };
 use scraper::{Html, Selector};
 use typsess::{
-    ExecutionOutput, InputStatus, PageSetup, RenderMode, SourceMode, TypstReplSession,
-    WorldOptions, classify_input,
+    ExecutionOutput, InputStatus, RenderMode, SourceMode, TypstReplSession, WorldOptions,
+    classify_input,
 };
 
 use crate::output::{format_diagnostics, format_diagnostics_rich};
+use crate::session::create_session;
 
 const REPL_PROMPT_LABEL: &str = "typst";
 
 pub fn run(
     mode: RenderMode,
     source_mode: SourceMode,
-    page_setup: PageSetup,
+    page_setup: String,
     full_html: bool,
     world_options: WorldOptions,
 ) -> Result<()> {
-    let mut session =
-        TypstReplSession::new_with_options(mode, source_mode, page_setup, world_options)
-            .map_err(|diagnostics| anyhow!(format_diagnostics(diagnostics)))?;
+    let mut session = create_session(mode, source_mode, page_setup, world_options)
+        .map_err(|diagnostics| anyhow!(format_diagnostics(diagnostics)))?;
     let mut buffer = String::new();
 
     if io::stdin().is_terminal() {
