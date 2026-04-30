@@ -34,7 +34,6 @@ fn is_incomplete_input(message: &str) -> bool {
     let message = message.trim();
     message.starts_with("unclosed ")
         || [
-            "expected expression",
             "expected block",
             "expected argument list",
             "expected identifier",
