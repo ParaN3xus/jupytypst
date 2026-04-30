@@ -30,7 +30,7 @@ pub fn run(mode: RenderMode, page_setup: PageSetup) -> Result<()> {
         buffer.push_str(&line);
         match classify_input(&buffer) {
             InputStatus::Complete => {
-                execute_buffer(&mut session, &buffer)?;
+                execute_buffer(&mut session, &buffer);
                 buffer.clear();
                 print_prompt(false)?;
             }
@@ -68,7 +68,7 @@ fn handle_command(
         }
         ".run" => {
             if !buffer.trim().is_empty() {
-                execute_buffer(session, buffer)?;
+                execute_buffer(session, buffer);
                 buffer.clear();
             }
             Ok(false)
@@ -80,17 +80,25 @@ fn handle_command(
     }
 }
 
-fn execute_buffer(session: &mut TypstReplSession, buffer: &str) -> Result<()> {
-    let result = session
-        .execute(buffer)
-        .map_err(|diagnostics| anyhow!(format_diagnostics(diagnostics)))?;
+fn execute_buffer(session: &mut TypstReplSession, buffer: &str) {
+    let result = match session.execute(buffer) {
+        Ok(result) => result,
+        Err(diagnostics) => {
+            eprintln!("{}", format_diagnostics(diagnostics));
+            return;
+        }
+    };
     for warning in result.warnings {
         eprintln!("{}", warning.message);
     }
-    let html = execution_output_to_html(result.output)
-        .map_err(|diagnostics| anyhow!(format_diagnostics(diagnostics)))?;
+    let html = match execution_output_to_html(result.output) {
+        Ok(html) => html,
+        Err(diagnostics) => {
+            eprintln!("{}", format_diagnostics(diagnostics));
+            return;
+        }
+    };
     println!("{html}");
-    Ok(())
 }
 
 fn print_prompt(continuation: bool) -> Result<()> {
