@@ -1,0 +1,16 @@
+[package]
+name = "typst-repl"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+comemo.workspace = true
+ecow.workspace = true
+fontdb.workspace = true
+tinymist-world.workspace = true
+typst.workspace = true
+typst-eval.workspace = true
+typst-html.workspace = true
+typst-layout.workspace = true
+typst-svg.workspace = true

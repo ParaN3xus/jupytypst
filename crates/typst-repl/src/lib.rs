@@ -20,7 +20,7 @@ use typst::syntax::{Span, VirtualPath, ast, ast::AstNode, parse_code};
 use typst_eval::{Eval, Vm};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Mode {
+pub enum RenderMode {
     Svg,
     Html,
 }
@@ -52,12 +52,6 @@ impl PageSetup {
 }
 
 #[derive(Debug)]
-pub struct ParsedCell {
-    pub mode: Mode,
-    pub body: String,
-}
-
-#[derive(Debug)]
 pub enum ExecutionOutput {
     Svg(String),
     Html(String),
@@ -69,19 +63,44 @@ pub struct ExecutionResult {
     pub warnings: Vec<String>,
 }
 
-pub struct TypstSession {
-    mode: Mode,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InputStatus {
+    Complete,
+    Incomplete(String),
+    Invalid(String),
+}
+
+pub fn classify_input(source: &str) -> InputStatus {
+    let errors = parse_code(source).errors();
+    if errors.is_empty() {
+        return InputStatus::Complete;
+    }
+
+    let message = errors
+        .into_iter()
+        .map(|error| error.message.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if is_incomplete_input(&message) {
+        InputStatus::Incomplete(message)
+    } else {
+        InputStatus::Invalid(message)
+    }
+}
+
+pub struct TypstReplSession {
+    render_mode: RenderMode,
     scope: Scope,
     styles: Styles,
     introspection_updates: Vec<Content>,
     world: TypstSystemWorld,
 }
 
-impl TypstSession {
-    pub fn new(page_setup: PageSetup) -> Result<Self> {
+impl TypstReplSession {
+    pub fn new(render_mode: RenderMode, page_setup: PageSetup) -> Result<Self> {
         let world = create_world()?;
         let mut session = Self {
-            mode: Mode::Svg,
+            render_mode,
             scope: Scope::new(),
             styles: Styles::new(),
             introspection_updates: Vec::new(),
@@ -92,13 +111,19 @@ impl TypstSession {
     }
 
     pub fn execute(&mut self, source: &str) -> Result<ExecutionResult> {
-        let cell = parse_cell(source, self.mode)?;
-        self.mode = cell.mode;
-        let evaluated = self.evaluate_code(&cell.body)?;
+        self.execute_with_mode(source, self.render_mode)
+    }
+
+    pub fn execute_with_mode(
+        &mut self,
+        source: &str,
+        render_mode: RenderMode,
+    ) -> Result<ExecutionResult> {
+        let evaluated = self.evaluate_code(source)?;
         let content = self.with_introspection_context(evaluated.content.clone());
-        let output = match cell.mode {
-            Mode::Svg => self.render_svg(content)?,
-            Mode::Html => self.render_html(content)?,
+        let output = match render_mode {
+            RenderMode::Svg => self.render_svg(content)?,
+            RenderMode::Html => self.render_html(content)?,
         };
         self.introspection_updates
             .extend(collect_introspection_updates(&evaluated.content));
@@ -228,53 +253,29 @@ impl TypstSession {
     }
 }
 
-impl Default for TypstSession {
+impl Default for TypstReplSession {
     fn default() -> Self {
-        Self::new(PageSetup::Default).expect("default page setup should be valid")
-    }
-}
-
-pub fn parse_cell(source: &str, default_mode: Mode) -> Result<ParsedCell> {
-    let mut mode = default_mode;
-    let mut body_start = 0;
-
-    for line in source.split_inclusive('\n') {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            body_start += line.len();
-            continue;
-        }
-        if let Some(rest) = trimmed.strip_prefix("// jupytypst:") {
-            mode = parse_directive(rest)?;
-            body_start += line.len();
-            continue;
-        }
-        break;
-    }
-
-    Ok(ParsedCell {
-        mode,
-        body: source[body_start..].to_string(),
-    })
-}
-
-fn parse_directive(rest: &str) -> Result<Mode> {
-    let rest = rest.trim();
-    let Some(value) = rest.strip_prefix("mode=").map(str::trim) else {
-        return Err(anyhow!("unsupported jupytypst directive `{rest}`"));
-    };
-    match value {
-        "eval" => Err(anyhow!(
-            "jupytypst no longer supports mode=eval; use mode=svg or mode=html"
-        )),
-        "svg" => Ok(Mode::Svg),
-        "html" => Ok(Mode::Html),
-        other => Err(anyhow!("unsupported jupytypst mode `{other}`")),
+        Self::new(RenderMode::Html, PageSetup::Default).expect("default page setup should be valid")
     }
 }
 
 fn normalize_code_statement(code: &str) -> &str {
     code.trim_start_matches('#').trim_start()
+}
+
+fn is_incomplete_input(message: &str) -> bool {
+    let message = message.trim();
+    message.starts_with("unclosed ")
+        || [
+            "expected expression",
+            "expected block",
+            "expected argument list",
+            "expected identifier",
+            "expected pattern",
+            "expected colon",
+        ]
+        .iter()
+        .any(|prefix| message.starts_with(prefix))
 }
 
 struct EvaluatedCell {
@@ -556,40 +557,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_comment_mode_directive() {
-        let cell = parse_cell("// jupytypst: mode=svg\n[Test]", Mode::Svg).unwrap();
-        assert_eq!(cell.mode, Mode::Svg);
-        assert_eq!(cell.body, "[Test]");
-    }
-
-    #[test]
-    fn rejects_eval_mode() {
-        let error = parse_cell("// jupytypst: mode=eval\n1 + 2", Mode::Svg).unwrap_err();
-        assert!(error.to_string().contains("mode=eval"));
-    }
-
-    #[test]
     fn top_level_text_set_persists_between_cells() {
-        let mut session = TypstSession::default();
+        let mut session = svg_session();
         session.execute("set text(fill: red)\n[First]").unwrap();
         assert!(session_has_style_for(&session, "text", "fill"));
         assert!(svg_output(session.execute("[Second]").unwrap()).contains("<svg"));
     }
 
     #[test]
-    fn default_mode_is_svg() {
-        let cell = parse_cell("[Test]", Mode::Svg).unwrap();
-        assert_eq!(cell.mode, Mode::Svg);
-    }
-
-    #[test]
     fn svg_mode_does_not_rerender_previous_visible_content() {
-        let mut session = TypstSession::default();
-        session
-            .execute("// jupytypst: mode=svg\nlorem(20)")
-            .unwrap();
+        let mut session = svg_session();
+        session.execute("lorem(20)").unwrap();
 
-        let output = session.execute("// jupytypst: mode=svg\n[Test]").unwrap();
+        let output = session.execute("[Test]").unwrap();
         match output.output {
             ExecutionOutput::Svg(svg) => {
                 assert!(svg.contains("<svg"));
@@ -601,7 +581,7 @@ mod tests {
 
     #[test]
     fn code_context_persists_without_hash_prefix() {
-        let mut session = TypstSession::default();
+        let mut session = svg_session();
         session.execute("let f(a, b) = a + b").unwrap();
         let output = session.execute("f(1, 2)").unwrap();
         match output.output {
@@ -612,7 +592,7 @@ mod tests {
 
     #[test]
     fn page_set_rules_do_not_persist_between_cells() {
-        let mut session = TypstSession::default();
+        let mut session = svg_session();
         session.execute("set page(paper: \"a4\")\n[First]").unwrap();
 
         let svg = svg_output(session.execute("[Second]").unwrap());
@@ -622,7 +602,7 @@ mod tests {
 
     #[test]
     fn page_setup_default_initializes_persistent_styles() {
-        let session = TypstSession::default();
+        let session = svg_session();
         assert!(session_has_style_for(&session, "page", "width"));
         assert!(session_has_style_for(&session, "page", "height"));
         assert!(session_has_style_for(&session, "page", "margin"));
@@ -630,8 +610,8 @@ mod tests {
 
     #[test]
     fn default_page_setup_controls_rendered_svg_size() {
-        let mut default_session = TypstSession::default();
-        let mut no_setup_session = TypstSession::new(PageSetup::None).unwrap();
+        let mut default_session = svg_session();
+        let mut no_setup_session = TypstReplSession::new(RenderMode::Svg, PageSetup::None).unwrap();
 
         let default_svg = svg_output(default_session.execute("[x]").unwrap());
         let no_setup_svg = svg_output(no_setup_session.execute("[x]").unwrap());
@@ -653,7 +633,7 @@ mod tests {
 
     #[test]
     fn page_setup_none_does_not_initialize_page_styles() {
-        let session = TypstSession::new(PageSetup::None).unwrap();
+        let session = TypstReplSession::new(RenderMode::Svg, PageSetup::None).unwrap();
         assert!(!session_has_style_for(&session, "page", "width"));
         assert!(!session_has_style_for(&session, "page", "height"));
         assert!(!session_has_style_for(&session, "page", "margin"));
@@ -661,13 +641,17 @@ mod tests {
 
     #[test]
     fn page_setup_custom_initializes_persistent_styles() {
-        let session = TypstSession::new(PageSetup::Custom("#set page(fill: red)".into())).unwrap();
+        let session = TypstReplSession::new(
+            RenderMode::Svg,
+            PageSetup::Custom("#set page(fill: red)".into()),
+        )
+        .unwrap();
         assert!(session_has_style_for(&session, "page", "fill"));
     }
 
     #[test]
     fn current_cell_page_size_overrides_default_but_does_not_persist() {
-        let mut session = TypstSession::default();
+        let mut session = svg_session();
         let initial_width_count = session_style_count_for(&session, "page", "width");
 
         let wide_svg = svg_output(
@@ -687,7 +671,7 @@ mod tests {
 
     #[test]
     fn page_fill_persists_but_page_width_does_not() {
-        let mut session = TypstSession::default();
+        let mut session = svg_session();
         let initial_width_count = session_style_count_for(&session, "page", "width");
         session
             .execute("set page(width: 3cm, fill: red)\n[First]")
@@ -702,7 +686,7 @@ mod tests {
 
     #[test]
     fn anonymous_show_rules_warn_and_do_not_persist() {
-        let mut session = TypstSession::default();
+        let mut session = svg_session();
         let result = session.execute("show: it => emph(it)\n[First]").unwrap();
         assert!(
             result
@@ -716,7 +700,7 @@ mod tests {
 
     #[test]
     fn selector_show_rules_persist_between_cells() {
-        let mut session = TypstSession::default();
+        let mut session = svg_session();
         session
             .execute("show regex(\"x\"): set text(fill: red)\n[x]")
             .unwrap();
@@ -726,10 +710,10 @@ mod tests {
 
     #[test]
     fn state_updates_persist_between_cells_without_visible_content() {
-        let mut session = TypstSession::default();
+        let mut session = html_session();
         let first = html_output(
             session
-                .execute("// jupytypst: mode=html\nlet s = state(\"test\", \"init\")\ns.update(\"upd\")\ncontext s.get()")
+                .execute("let s = state(\"test\", \"init\")\ns.update(\"upd\")\ncontext s.get()")
                 .unwrap(),
         );
         let second = html_output(session.execute("context s.get()").unwrap());
@@ -742,10 +726,8 @@ mod tests {
 
     #[test]
     fn svg_mode_wraps_multiple_pages_as_independent_svgs() {
-        let mut session = TypstSession::default();
-        let output = session
-            .execute("// jupytypst: mode=svg\n[x]\n\npagebreak()\n\n[x]")
-            .unwrap();
+        let mut session = svg_session();
+        let output = session.execute("[x]\n\npagebreak()\n\n[x]").unwrap();
         match output.output {
             ExecutionOutput::Svg(html) => {
                 assert!(html.contains("jupytypst-pages"));
@@ -753,6 +735,46 @@ mod tests {
             }
             other => panic!("unexpected output: {other:?}"),
         }
+    }
+
+    #[test]
+    fn execute_with_mode_renders_without_parsing_host_directives() {
+        let mut session = html_session();
+        let html = html_output(session.execute_with_mode("[x]", RenderMode::Html).unwrap());
+        assert!(html.contains("<p>x</p>"));
+
+        let svg = svg_output(session.execute_with_mode("[x]", RenderMode::Svg).unwrap());
+        assert!(svg.contains("<svg"));
+    }
+
+    #[test]
+    fn classifies_complete_input() {
+        assert_eq!(classify_input("let x = 1"), InputStatus::Complete);
+    }
+
+    #[test]
+    fn classifies_incomplete_input() {
+        assert!(matches!(classify_input("("), InputStatus::Incomplete(_)));
+        assert!(matches!(
+            classify_input("\"abc"),
+            InputStatus::Incomplete(_)
+        ));
+    }
+
+    #[test]
+    fn classifies_invalid_input() {
+        assert!(matches!(
+            classify_input("let x = 1 2"),
+            InputStatus::Invalid(_)
+        ));
+    }
+
+    fn svg_session() -> TypstReplSession {
+        TypstReplSession::new(RenderMode::Svg, PageSetup::Default).unwrap()
+    }
+
+    fn html_session() -> TypstReplSession {
+        TypstReplSession::new(RenderMode::Html, PageSetup::Default).unwrap()
     }
 
     fn svg_output(result: ExecutionResult) -> String {
@@ -769,11 +791,11 @@ mod tests {
         }
     }
 
-    fn session_has_style_for(session: &TypstSession, element: &str, field: &str) -> bool {
+    fn session_has_style_for(session: &TypstReplSession, element: &str, field: &str) -> bool {
         session_style_count_for(session, element, field) > 0
     }
 
-    fn session_style_count_for(session: &TypstSession, element: &str, field: &str) -> usize {
+    fn session_style_count_for(session: &TypstReplSession, element: &str, field: &str) -> usize {
         session
             .styles
             .iter()

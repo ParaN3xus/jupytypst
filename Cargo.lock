@@ -1722,21 +1722,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "comemo",
- "ecow",
- "fontdb",
  "jupyter-protocol",
  "runtimelib",
  "serde",
  "serde_json",
  "tempfile",
- "tinymist-world",
  "tokio",
- "typst",
- "typst-eval",
- "typst-html",
- "typst-layout",
- "typst-svg",
+ "typst-repl",
  "uuid",
 ]
 
@@ -3837,6 +3829,22 @@ dependencies = [
  "typst-syntax",
  "typst-timing",
  "typst-utils",
+]
+
+[[package]]
+name = "typst-repl"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "comemo",
+ "ecow",
+ "fontdb",
+ "tinymist-world",
+ "typst",
+ "typst-eval",
+ "typst-html",
+ "typst-layout",
+ "typst-svg",
 ]
 
 [[package]]

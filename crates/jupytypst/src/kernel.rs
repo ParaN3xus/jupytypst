@@ -16,7 +16,10 @@ use runtimelib::{
 use uuid::Uuid;
 
 use crate::DISPLAY_NAME;
-use crate::typst_session::{ExecutionOutput, PageSetup, TypstSession};
+use crate::cell::parse_cell;
+use typst_repl::{
+    ExecutionOutput, InputStatus, PageSetup, RenderMode, TypstReplSession, classify_input,
+};
 
 pub async fn run(connection_file: PathBuf, page_setup: String) -> Result<()> {
     let bytes = std::fs::read(&connection_file)
@@ -31,7 +34,8 @@ struct KernelServer {
     execution_count: ExecutionCount,
     iopub: runtimelib::KernelIoPubXPubConnection,
     shell: RouterSendConnection,
-    typst: TypstSession,
+    typst: TypstReplSession,
+    default_mode: RenderMode,
 }
 
 impl KernelServer {
@@ -78,7 +82,8 @@ impl KernelServer {
             execution_count: ExecutionCount::new(0),
             iopub,
             shell: shell_writer,
-            typst: TypstSession::new(page_setup)?,
+            typst: TypstReplSession::new(RenderMode::Svg, page_setup)?,
+            default_mode: RenderMode::Svg,
         };
         let shell_handle =
             tokio::spawn(async move { kernel.shell_loop(shell_reader, shutdown_rx).await });
@@ -162,9 +167,14 @@ impl KernelServer {
                 };
                 self.shell.send(reply.as_child_of(parent)).await?;
             }
-            JupyterMessageContent::IsCompleteRequest(_) => {
+            JupyterMessageContent::IsCompleteRequest(request) => {
+                let status = match classify_input(&request.code) {
+                    InputStatus::Complete => IsCompleteReplyStatus::Complete,
+                    InputStatus::Incomplete(_) => IsCompleteReplyStatus::Incomplete,
+                    InputStatus::Invalid(_) => IsCompleteReplyStatus::Invalid,
+                };
                 let reply = IsCompleteReply {
-                    status: IsCompleteReplyStatus::Complete,
+                    status,
                     indent: String::new(),
                 };
                 self.shell.send(reply.as_child_of(parent)).await?;
@@ -214,7 +224,9 @@ impl KernelServer {
             )
             .await?;
 
-        let reply = match self.typst.execute(code) {
+        let cell = parse_cell(code, self.default_mode);
+        let reply = match cell.and_then(|cell| self.typst.execute_with_mode(&cell.body, cell.mode))
+        {
             Ok(result) => {
                 for warning in result.warnings {
                     self.iopub

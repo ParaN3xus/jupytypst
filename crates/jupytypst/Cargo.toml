@@ -1,0 +1,16 @@
+[package]
+name = "jupytypst"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+jupyter-protocol.workspace = true
+runtimelib.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+typst-repl.workspace = true
+uuid.workspace = true

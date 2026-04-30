@@ -4,12 +4,14 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use jupyter_protocol::JupyterKernelspec;
 use tempfile::TempDir;
+use typst_repl::{PageSetup, RenderMode};
 
+mod cell;
 mod kernel;
-mod typst_session;
+mod repl;
 
 const KERNEL_NAME: &str = "jupytypst";
 const DISPLAY_NAME: &str = "Typst (Code Mode)";
@@ -25,6 +27,8 @@ struct Cli {
 enum CommandKind {
     /// Start the Jupyter kernel.
     Start(StartArgs),
+    /// Start an interactive Typst code-mode REPL.
+    Repl(ReplArgs),
     /// Install the Jupyter kernelspec for this binary.
     Install(InstallArgs),
 }
@@ -37,6 +41,31 @@ struct StartArgs {
     /// Page setup injected before each rendered cell. Omit for `set page(width: auto, height: auto, margin: 16pt)`, use `none` to disable, or pass Typst code.
     #[arg(long)]
     page_setup: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct ReplArgs {
+    /// Render mode for terminal output.
+    #[arg(long, value_enum, default_value_t = CliRenderMode::Html)]
+    mode: CliRenderMode,
+    /// Page setup for rendered cells. Omit for `set page(width: auto, height: auto, margin: 16pt)`, use `none` to disable, or pass Typst code.
+    #[arg(long)]
+    page_setup: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum CliRenderMode {
+    Svg,
+    Html,
+}
+
+impl From<CliRenderMode> for RenderMode {
+    fn from(value: CliRenderMode) -> Self {
+        match value {
+            CliRenderMode::Svg => Self::Svg,
+            CliRenderMode::Html => Self::Html,
+        }
+    }
 }
 
 #[derive(Debug, Args)]
@@ -64,6 +93,7 @@ async fn main() -> Result<()> {
 
     match cli.command {
         CommandKind::Start(args) => start_kernel(args).await,
+        CommandKind::Repl(args) => start_repl(args),
         CommandKind::Install(args) => install_kernelspec(args),
     }
 }
@@ -74,6 +104,15 @@ async fn start_kernel(args: StartArgs) -> Result<()> {
         args.page_setup.unwrap_or_else(|| "default".to_string()),
     )
     .await
+}
+
+fn start_repl(args: ReplArgs) -> Result<()> {
+    let page_setup = parse_page_setup(args.page_setup)?;
+    repl::run(args.mode.into(), page_setup)
+}
+
+fn parse_page_setup(page_setup: Option<String>) -> Result<PageSetup> {
+    PageSetup::parse(page_setup.as_deref().unwrap_or("default"))
 }
 
 fn install_kernelspec(args: InstallArgs) -> Result<()> {
