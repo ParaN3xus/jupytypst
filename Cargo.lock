@@ -1414,6 +1414,7 @@ dependencies = [
  "typst-eval",
  "typst-html",
  "typst-kit",
+ "typst-layout",
  "typst-svg",
  "uuid",
 ]

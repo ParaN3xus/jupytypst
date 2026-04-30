@@ -1,15 +1,23 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
-use ecow::{EcoVec, eco_format};
+use comemo::{Constraint, Track};
+use ecow::{EcoVec, eco_format, eco_vec};
 use parking_lot::Mutex;
-use typst::diag::{FileError, FileResult, SourceDiagnostic};
-use typst::foundations::{Bytes, Datetime};
-use typst::layout::PagedDocument;
-use typst::syntax::{FileId, Source, VirtualPath};
+use typst::diag::{At, FileError, FileResult, SourceDiagnostic};
+use typst::engine::{Engine, Route, Sink, Traced};
+use typst::foundations::{
+    Bytes, Content, Context, Datetime, Element, Scope, Scopes, Style, StyleChain, Styles, Target,
+    TargetElem, Value, ops,
+};
+use typst::introspection::Introspector;
+use typst::layout::{PageElem, PagedDocument};
+use typst::syntax::{FileId, Source, Span, VirtualPath, ast, ast::AstNode, parse_code};
 use typst::text::{Font, FontBook};
 use typst::utils::LazyHash;
 use typst::{Feature, Features, Library, LibraryExt, World};
+use typst_eval::{Eval, Vm};
 use typst_kit::fonts::{FontSlot, Fonts};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,70 +65,151 @@ pub enum ExecutionOutput {
 }
 
 #[derive(Debug)]
+pub struct ExecutionResult {
+    pub output: ExecutionOutput,
+    pub warnings: Vec<String>,
+}
+
 pub struct TypstSession {
     mode: Mode,
     page_setup: PageSetup,
-    context_code: Vec<String>,
-    root: PathBuf,
-    fonts: Fonts,
+    scope: Scope,
+    styles: Styles,
+    world: Arc<SessionWorld>,
 }
 
 impl TypstSession {
     pub fn new(page_setup: PageSetup) -> Self {
         let mut searcher = Fonts::searcher();
         let fonts = searcher.search();
+        let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         Self {
             mode: Mode::Svg,
             page_setup,
-            context_code: Vec::new(),
-            root: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-            fonts,
+            scope: Scope::new(),
+            styles: Styles::new(),
+            world: Arc::new(SessionWorld::new(&root, fonts.clone_for_world())),
         }
     }
 
-    pub fn execute(&mut self, source: &str) -> Result<ExecutionOutput> {
+    pub fn execute(&mut self, source: &str) -> Result<ExecutionResult> {
         let cell = parse_cell(source, self.mode)?;
         self.mode = cell.mode;
+        let evaluated = self.evaluate_code(&cell.body)?;
         let output = match cell.mode {
-            Mode::Svg => self.render_svg(&cell.body)?,
-            Mode::Html => self.render_html(&cell.body)?,
+            Mode::Svg => self.render_svg(evaluated.content)?,
+            Mode::Html => self.render_html(evaluated.content)?,
         };
-        self.context_code
-            .extend(extract_context_code(&cell.body, cell.mode));
-        Ok(output)
+        Ok(ExecutionResult {
+            output,
+            warnings: evaluated.warnings,
+        })
     }
 
-    fn render_svg(&self, code: &str) -> Result<ExecutionOutput> {
-        let source = self.render_source(code);
-        let world = SessionWorld::new(&self.root, &source, self.fonts.clone_for_world());
-        let warned = typst::compile::<PagedDocument>(&world);
-        let document = warned.output.map_err(format_diagnostics)?;
+    fn evaluate_code(&mut self, code: &str) -> Result<EvaluatedCell> {
+        let mut setup_styles = Styles::new();
+        if let Some(page_setup) = self.page_setup.code() {
+            let setup = normalize_code_statement(page_setup);
+            setup_styles = self.evaluate_source(setup, false)?.captured_styles;
+        }
+
+        let evaluated = self.evaluate_source(code, true)?;
+        self.scope = evaluated.scope;
+        self.styles.apply(evaluated.captured_styles);
+
+        let content = evaluated
+            .value
+            .display()
+            .styled_with_map(setup_styles)
+            .styled_with_map(self.styles.clone());
+
+        Ok(EvaluatedCell {
+            content,
+            warnings: evaluated.warnings,
+        })
+    }
+
+    fn evaluate_source(&self, source: &str, capture_styles: bool) -> Result<EvaluatedSource> {
+        self.world.replace_source(source);
+
+        let span = Span::from_range(self.world.main(), 0..source.len());
+        let mut root = parse_code(source);
+        root.synthesize(span);
+
+        let errors = root.errors();
+        if !errors.is_empty() {
+            return Err(format_diagnostics(
+                errors.into_iter().map(Into::into).collect(),
+            ));
+        }
+
+        let mut sink = Sink::new();
+        let mut captured_styles = Styles::new();
+        let mut warnings = Vec::new();
+        let (value, new_scope, sink_warnings) = {
+            let introspector = Introspector::default();
+            let traced = Traced::default();
+            let engine = Engine {
+                routines: &typst::ROUTINES,
+                world: (self.world.as_ref() as &dyn World).track(),
+                introspector: introspector.track(),
+                traced: traced.track(),
+                sink: sink.track_mut(),
+                route: Route::default(),
+            };
+            let context = Context::none();
+            let mut scopes = Scopes::new(Some(self.world.library()));
+            scopes.top = self.scope.clone();
+            let mut vm = Vm::new(engine, context.track(), scopes, root.span());
+            let value = eval_code_capture(
+                &mut vm,
+                &mut root.cast::<ast::Code>().unwrap().exprs(),
+                capture_styles,
+                &mut captured_styles,
+                &mut warnings,
+            )
+            .map_err(format_diagnostics)?;
+            if let Some(flow) = vm.flow {
+                return Err(format_diagnostics(eco_vec![flow.forbidden()]));
+            }
+            let new_scope = vm.scopes.top.clone();
+            drop(vm);
+            (value, new_scope, sink.warnings())
+        };
+
+        warnings.extend(format_warnings(sink_warnings));
+
+        Ok(EvaluatedSource {
+            value,
+            scope: new_scope,
+            captured_styles,
+            warnings,
+        })
+    }
+
+    fn render_svg(&self, content: Content) -> Result<ExecutionOutput> {
+        let document =
+            layout_paged_document(self.world.as_ref(), &content).map_err(format_diagnostics)?;
         Ok(ExecutionOutput::Svg(svg_pages_html(&document)))
     }
 
-    fn render_html(&self, code: &str) -> Result<ExecutionOutput> {
-        let source = self.render_source(code);
-        let world = SessionWorld::new(&self.root, &source, self.fonts.clone_for_world());
-        let warned = typst::compile::<typst_html::HtmlDocument>(&world);
-        let document = warned.output.map_err(format_diagnostics)?;
+    fn render_html(&self, content: Content) -> Result<ExecutionOutput> {
+        let document =
+            layout_html_document(self.world.as_ref(), &content).map_err(format_diagnostics)?;
         Ok(ExecutionOutput::Html(
             typst_html::html(&document).map_err(format_diagnostics)?,
         ))
     }
 
-    fn render_source(&self, code: &str) -> String {
-        let mut source = String::from("#{\n");
+    #[cfg(test)]
+    fn cell_source(&self, code: &str) -> CellSource {
+        let mut source = String::new();
         if let Some(page_setup) = self.page_setup.code() {
             source.push_str(normalize_code_statement(page_setup));
             source.push('\n');
         }
-        for line in &self.context_code {
-            source.push_str(line);
-            source.push('\n');
-        }
         source.push_str(code);
-        source.push_str("\n}\n");
-        source
+        CellSource { source }
     }
 }
 
@@ -169,30 +258,109 @@ fn parse_directive(rest: &str) -> Result<Mode> {
     }
 }
 
-fn extract_context_code(source: &str, mode: Mode) -> Vec<String> {
-    source
-        .lines()
-        .filter_map(|line| {
-            let trimmed = line.trim();
-            let code = match mode {
-                Mode::Svg | Mode::Html => normalize_code_statement(trimmed),
-            };
-            is_context_statement(code).then(|| code.to_string())
-        })
-        .collect()
+#[cfg(test)]
+struct CellSource {
+    source: String,
 }
 
 fn normalize_code_statement(code: &str) -> &str {
     code.trim_start_matches('#').trim_start()
 }
 
-fn is_context_statement(code: &str) -> bool {
-    if code.starts_with("set page") {
-        return false;
+struct EvaluatedCell {
+    content: Content,
+    warnings: Vec<String>,
+}
+
+struct EvaluatedSource {
+    value: Value,
+    scope: Scope,
+    captured_styles: Styles,
+    warnings: Vec<String>,
+}
+
+fn eval_code_capture<'a>(
+    vm: &mut Vm,
+    exprs: &mut impl Iterator<Item = ast::Expr<'a>>,
+    capture_top_level: bool,
+    captured_styles: &mut Styles,
+    warnings: &mut Vec<String>,
+) -> typst::diag::SourceResult<Value> {
+    let flow = vm.flow.take();
+    let mut output = Value::None;
+
+    while let Some(expr) = exprs.next() {
+        let span = expr.span();
+        let value = match expr {
+            ast::Expr::SetRule(set) => {
+                let styles = set.eval(vm)?;
+                if capture_top_level {
+                    captured_styles.apply(filter_persistent_styles(styles.clone()));
+                }
+                if vm.flow.is_some() {
+                    break;
+                }
+                let tail =
+                    eval_code_capture(vm, exprs, capture_top_level, captured_styles, warnings)?
+                        .display();
+                Value::Content(tail.styled_with_map(styles))
+            }
+            ast::Expr::ShowRule(show) => {
+                let recipe = show.eval(vm)?;
+                let is_anonymous = recipe.selector().is_none();
+                if capture_top_level {
+                    if is_anonymous {
+                        warnings.push(
+                            "jupytypst: anonymous `show: ...` rules are cell-local and are not persisted"
+                                .to_string(),
+                        );
+                    } else {
+                        captured_styles.apply(Style::from(recipe.clone()).into());
+                    }
+                }
+                if vm.flow.is_some() {
+                    break;
+                }
+                let tail =
+                    eval_code_capture(vm, exprs, capture_top_level, captured_styles, warnings)?
+                        .display();
+                Value::Content(tail.styled_with_recipe(&mut vm.engine, vm.context, recipe)?)
+            }
+            ast::Expr::CodeBlock(block) => block.eval(vm)?,
+            _ => expr.eval(vm)?,
+        };
+
+        output = ops::join(output, value).at(span)?;
+
+        if vm.flow.is_some() {
+            break;
+        }
     }
-    ["let ", "set ", "show ", "import ", "include "]
-        .iter()
-        .any(|prefix| code.starts_with(prefix))
+
+    if flow.is_some() {
+        vm.flow = flow;
+    }
+
+    Ok(output)
+}
+
+fn filter_persistent_styles(styles: Styles) -> Styles {
+    styles
+        .into_iter()
+        .filter(|style| {
+            style
+                .property()
+                .is_none_or(|property| !is_transient_page_property(property))
+        })
+        .collect()
+}
+
+fn is_transient_page_property(property: &typst::foundations::Property) -> bool {
+    let page = Element::of::<PageElem>();
+    ["paper", "width", "height"]
+        .into_iter()
+        .filter_map(|field| page.field_id(field))
+        .any(|id| property.is(page, id))
 }
 
 fn format_diagnostics(diagnostics: EcoVec<SourceDiagnostic>) -> anyhow::Error {
@@ -202,6 +370,105 @@ fn format_diagnostics(diagnostics: EcoVec<SourceDiagnostic>) -> anyhow::Error {
         .collect::<Vec<_>>()
         .join("\n");
     anyhow!(message)
+}
+
+fn format_warnings(warnings: EcoVec<SourceDiagnostic>) -> Vec<String> {
+    warnings
+        .into_iter()
+        .map(|diagnostic| diagnostic.message.to_string())
+        .collect()
+}
+
+fn layout_paged_document(
+    world: &dyn World,
+    content: &Content,
+) -> typst::diag::SourceResult<PagedDocument> {
+    let library = world.library();
+    let base = StyleChain::new(&library.styles);
+    let target_style = TargetElem::target.set(Target::Paged).wrap();
+    let styles = base.chain(&target_style);
+    let empty_introspector = Introspector::default();
+    let traced = Traced::default();
+    let mut previous = None;
+
+    for iteration in 0..5 {
+        let current_introspector = previous
+            .as_ref()
+            .map(|document: &PagedDocument| &document.introspector)
+            .unwrap_or(&empty_introspector);
+        let constraint = Constraint::new();
+        let mut sink = Sink::new();
+        let document = {
+            let mut engine = Engine {
+                routines: &typst::ROUTINES,
+                world: world.track(),
+                introspector: current_introspector.track_with(&constraint),
+                traced: traced.track(),
+                sink: sink.track_mut(),
+                route: Route::default(),
+            };
+            typst_layout::layout_document(&mut engine, content, styles)?
+        };
+
+        let delayed = sink.delayed();
+        if !delayed.is_empty() {
+            return Err(delayed);
+        }
+
+        if constraint.validate(&document.introspector) || iteration == 4 {
+            return Ok(document);
+        }
+
+        previous = Some(document);
+    }
+
+    unreachable!("layout loop always returns within five iterations")
+}
+
+fn layout_html_document(
+    world: &dyn World,
+    content: &Content,
+) -> typst::diag::SourceResult<typst_html::HtmlDocument> {
+    let library = world.library();
+    let base = StyleChain::new(&library.styles);
+    let target_style = TargetElem::target.set(Target::Html).wrap();
+    let styles = base.chain(&target_style);
+    let introspector = Introspector::default();
+    let traced = Traced::default();
+    let mut previous = None;
+
+    for iteration in 0..5 {
+        let current_introspector = previous
+            .as_ref()
+            .map(|document: &typst_html::HtmlDocument| &document.introspector)
+            .unwrap_or(&introspector);
+        let constraint = Constraint::new();
+        let mut sink = Sink::new();
+        let document = {
+            let mut engine = Engine {
+                routines: &typst::ROUTINES,
+                world: world.track(),
+                introspector: current_introspector.track_with(&constraint),
+                traced: traced.track(),
+                sink: sink.track_mut(),
+                route: Route::default(),
+            };
+            typst_html::html_document(&mut engine, content, styles)?
+        };
+
+        let delayed = sink.delayed();
+        if !delayed.is_empty() {
+            return Err(delayed);
+        }
+
+        if constraint.validate(&document.introspector) || iteration == 4 {
+            return Ok(document);
+        }
+
+        previous = Some(document);
+    }
+
+    unreachable!("layout loop always returns within five iterations")
 }
 
 fn svg_pages_html(document: &PagedDocument) -> String {
@@ -237,7 +504,6 @@ fn svg_pages_html(document: &PagedDocument) -> String {
     )
 }
 
-#[derive(Debug)]
 struct WorldFonts {
     book: FontBook,
     fonts: Vec<FontSlot>,
@@ -261,7 +527,7 @@ impl CloneForWorld for Fonts {
 struct SessionWorld {
     root: PathBuf,
     main: FileId,
-    source: Source,
+    source: Mutex<Source>,
     library: LazyHash<Library>,
     book: LazyHash<FontBook>,
     fonts: Vec<FontSlot>,
@@ -269,7 +535,7 @@ struct SessionWorld {
 }
 
 impl SessionWorld {
-    fn new(root: &Path, source: &str, fonts: WorldFonts) -> Self {
+    fn new(root: &Path, fonts: WorldFonts) -> Self {
         let main = FileId::new_fake(VirtualPath::new("/main.typ"));
         let library = Library::builder()
             .with_features(Features::from_iter([Feature::Html]))
@@ -277,7 +543,7 @@ impl SessionWorld {
         Self {
             root: root.to_path_buf(),
             main,
-            source: Source::new(main, source.to_string()),
+            source: Mutex::new(Source::new(main, String::new())),
             library: LazyHash::new(library),
             book: LazyHash::new(fonts.book),
             fonts: fonts.fonts,
@@ -289,6 +555,10 @@ impl SessionWorld {
         id.vpath()
             .resolve(&self.root)
             .ok_or_else(|| FileError::Other(Some(eco_format!("path escapes project root"))))
+    }
+
+    fn replace_source(&self, source: &str) {
+        self.source.lock().replace(source);
     }
 }
 
@@ -307,7 +577,7 @@ impl World for SessionWorld {
 
     fn source(&self, id: FileId) -> FileResult<Source> {
         if id == self.main {
-            return Ok(self.source.clone());
+            return Ok(self.source.lock().clone());
         }
         let path = self.resolve(id)?;
         let text =
@@ -353,12 +623,11 @@ mod tests {
     }
 
     #[test]
-    fn extracts_code_context_without_visible_content() {
-        let context = extract_context_code(
-            "let x = 1\nset page(paper: \"a4\")\nset text(size: 14pt)\nlorem(100)\n[Test]",
-            Mode::Svg,
-        );
-        assert_eq!(context, vec!["let x = 1", "set text(size: 14pt)"]);
+    fn top_level_text_set_persists_between_cells() {
+        let mut session = TypstSession::default();
+        session.execute("set text(fill: red)\n[First]").unwrap();
+        assert!(session_has_style_for(&session, "text", "fill"));
+        assert!(svg_output(session.execute("[Second]").unwrap()).contains("<svg"));
     }
 
     #[test]
@@ -373,10 +642,9 @@ mod tests {
         session
             .execute("// jupytypst: mode=svg\nlorem(20)")
             .unwrap();
-        assert!(session.context_code.is_empty());
 
         let output = session.execute("// jupytypst: mode=svg\n[Test]").unwrap();
-        match output {
+        match output.output {
             ExecutionOutput::Svg(svg) => {
                 assert!(svg.contains("<svg"));
                 assert!(!svg.contains("Lorem"));
@@ -390,7 +658,7 @@ mod tests {
         let mut session = TypstSession::default();
         session.execute("let f(a, b) = a + b").unwrap();
         let output = session.execute("f(1, 2)").unwrap();
-        match output {
+        match output.output {
             ExecutionOutput::Svg(html) => assert!(html.contains("<svg")),
             other => panic!("unexpected output: {other:?}"),
         }
@@ -401,30 +669,65 @@ mod tests {
         let mut session = TypstSession::default();
         session.execute("set page(paper: \"a4\")\n[First]").unwrap();
 
-        let source = session.render_source("[Second]");
-        assert!(source.contains("set page(width: auto, height: auto, margin: 16pt)"));
-        assert!(!source.contains("paper: \"a4\""));
+        let svg = svg_output(session.execute("[Second]").unwrap());
+        assert!(svg.contains("<svg"));
+        assert!(!session_has_style_for(&session, "page", "paper"));
     }
 
     #[test]
     fn page_setup_default_is_injected() {
         let session = TypstSession::default();
-        let source = session.render_source("[Test]");
-        assert!(source.starts_with("#{\nset page(width: auto, height: auto, margin: 16pt)"));
+        let source = session.cell_source("[Test]").source;
+        assert!(source.starts_with("set page(width: auto, height: auto, margin: 16pt)"));
     }
 
     #[test]
     fn page_setup_none_is_not_injected() {
         let session = TypstSession::new(PageSetup::None);
-        let source = session.render_source("[Test]");
-        assert_eq!(source, "#{\n[Test]\n}\n");
+        let source = session.cell_source("[Test]").source;
+        assert_eq!(source, "[Test]");
     }
 
     #[test]
     fn page_setup_custom_is_injected() {
         let session = TypstSession::new(PageSetup::Custom("#set page(paper: \"a4\")".into()));
-        let source = session.render_source("[Test]");
-        assert!(source.starts_with("#{\nset page(paper: \"a4\")"));
+        let source = session.cell_source("[Test]").source;
+        assert!(source.starts_with("set page(paper: \"a4\")"));
+    }
+
+    #[test]
+    fn page_fill_persists_but_page_width_does_not() {
+        let mut session = TypstSession::default();
+        session
+            .execute("set page(width: 3cm, fill: red)\n[First]")
+            .unwrap();
+        assert!(session_has_style_for(&session, "page", "fill"));
+        assert!(!session_has_style_for(&session, "page", "width"));
+        assert!(svg_output(session.execute("[Second]").unwrap()).contains("<svg"));
+    }
+
+    #[test]
+    fn anonymous_show_rules_warn_and_do_not_persist() {
+        let mut session = TypstSession::default();
+        let result = session.execute("show: it => emph(it)\n[First]").unwrap();
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("anonymous `show: ...`"))
+        );
+        let svg = svg_output(session.execute("[Second]").unwrap());
+        assert!(svg.contains("<svg"));
+    }
+
+    #[test]
+    fn selector_show_rules_persist_between_cells() {
+        let mut session = TypstSession::default();
+        session
+            .execute("show regex(\"x\"): set text(fill: red)\n[x]")
+            .unwrap();
+        assert!(session.styles.iter().any(|style| style.recipe().is_some()));
+        assert!(svg_output(session.execute("[x]").unwrap()).contains("<svg"));
     }
 
     #[test]
@@ -433,12 +736,34 @@ mod tests {
         let output = session
             .execute("// jupytypst: mode=svg\n[x]\n\npagebreak()\n\n[x]")
             .unwrap();
-        match output {
+        match output.output {
             ExecutionOutput::Svg(html) => {
                 assert!(html.contains("jupytypst-pages"));
                 assert!(html.matches("<svg").count() >= 2);
             }
             other => panic!("unexpected output: {other:?}"),
         }
+    }
+
+    fn svg_output(result: ExecutionResult) -> String {
+        match result.output {
+            ExecutionOutput::Svg(svg) => svg,
+            other => panic!("unexpected output: {other:?}"),
+        }
+    }
+
+    fn session_has_style_for(session: &TypstSession, element: &str, field: &str) -> bool {
+        session.styles.iter().any(|style| {
+            let Some(property) = style.property() else {
+                return false;
+            };
+            let Some(style_element) = style.element() else {
+                return false;
+            };
+            style_element.name() == element
+                && style_element
+                    .field_id(field)
+                    .is_some_and(|id| property.is(style_element, id))
+        })
     }
 }

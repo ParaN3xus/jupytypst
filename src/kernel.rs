@@ -5,7 +5,7 @@ use jupyter_protocol::{
     CodeMirrorMode, CommInfoReply, CompleteReply, DisplayData, ErrorOutput, ExecuteInput,
     ExecuteReply, ExecutionCount, HistoryReply, InspectReply, IoPubWelcome, IsCompleteReply,
     IsCompleteReplyStatus, JupyterMessage, JupyterMessageContent, KernelInfoReply, LanguageInfo,
-    Media, MediaType, ReplyError, ReplyStatus, ShutdownReply, Status,
+    Media, MediaType, ReplyError, ReplyStatus, ShutdownReply, Status, StreamContent,
 };
 use runtimelib::{
     RouterRecvConnection, RouterSendConnection, SubscriptionEvent,
@@ -215,8 +215,13 @@ impl KernelServer {
             .await?;
 
         let reply = match self.typst.execute(code) {
-            Ok(output) => {
-                self.publish_output(output, parent).await?;
+            Ok(result) => {
+                for warning in result.warnings {
+                    self.iopub
+                        .send(StreamContent::stderr(&format!("{warning}\n")).as_child_of(parent))
+                        .await?;
+                }
+                self.publish_output(result.output, parent).await?;
                 ExecuteReply {
                     status: ReplyStatus::Ok,
                     execution_count,
