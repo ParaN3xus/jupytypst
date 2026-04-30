@@ -1724,6 +1724,7 @@ dependencies = [
  "clap",
  "comemo",
  "ecow",
+ "fontdb",
  "jupyter-protocol",
  "runtimelib",
  "serde",
@@ -3291,6 +3292,8 @@ dependencies = [
 [[package]]
 name = "tinymist-package"
 version = "0.14.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e2ddcef4bdb3cb56e8592462705a3e492358ac5b71fc0bc509ebe0765de3b5fb"
 dependencies = [
  "base64",
  "comemo",
@@ -3313,6 +3316,8 @@ dependencies = [
 [[package]]
 name = "tinymist-std"
 version = "0.14.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77f148b89cb872f5fcdf0c40d2ccf67b6d7d305c5a944b846d533dc39117475e"
 dependencies = [
  "anyhow",
  "base64",
@@ -3346,6 +3351,8 @@ dependencies = [
 [[package]]
 name = "tinymist-vfs"
 version = "0.14.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "51ac81f9350d21f3ff7d17bb9e3d2ead539956ad19c9535873135cb4126652e7"
 dependencies = [
  "comemo",
  "ecow",
@@ -3361,6 +3368,8 @@ dependencies = [
 [[package]]
 name = "tinymist-world"
 version = "0.14.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e3f59f8446d77b5ae0c66dda5d6f7584377302592c9777b2eb4b4de6966f9f62"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3833,6 +3842,8 @@ dependencies = [
 [[package]]
 name = "typst-shim"
 version = "0.14.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "265ebdc8767974992c3ce79fbaca4fcdae45a494e57361ee886eb1aa74562be4"
 dependencies = [
  "cfg-if",
  "comemo",

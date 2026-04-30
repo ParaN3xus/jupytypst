@@ -8,12 +8,13 @@ anyhow = "1.0.102"
 clap = { version = "4.6.1", features = ["derive"] }
 comemo = "0.5.1"
 ecow = "0.2.6"
+fontdb = { version = "0.23", default-features = false, features = ["fs", "memmap"] }
 jupyter-protocol = "2.0.0"
 runtimelib = { version = "2.0.0", features = ["tokio-runtime"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 tempfile = "3.27.0"
-tinymist-world = { path = "local/tinymist/crates/tinymist-world", features = ["system"] }
+tinymist-world = { version = "0.14.6", features = ["system"] }
 tokio = { version = "1.52.1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
 typst = "0.14.2"
 typst-eval = "0.14.2"
