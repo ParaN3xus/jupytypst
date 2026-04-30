@@ -255,7 +255,9 @@ fn write_kernel_json(spec_dir: &Path, binary: &Path) -> Result<()> {
         env: Some(HashMap::new()),
     };
 
-    let json = serde_json::to_string_pretty(&kernelspec)?;
+    let mut json = serde_json::to_value(&kernelspec)?;
+    json["kernel_protocol_version"] = kernel::JUPYTER_PROTOCOL_VERSION.into();
+    let json = serde_json::to_string_pretty(&json)?;
     fs::write(spec_dir.join("kernel.json"), json).context("failed to write kernel.json")?;
     Ok(())
 }

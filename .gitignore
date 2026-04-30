@@ -1,3 +1,8 @@
 /target
 
 /local
+
+# Local Python/Jupyter helper environment.
+/.python-version
+/pyproject.toml
+/uv.lock

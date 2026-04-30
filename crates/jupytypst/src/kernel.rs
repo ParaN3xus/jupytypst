@@ -23,7 +23,7 @@ use typsess::{
     classify_input,
 };
 
-const JUPYTER_PROTOCOL_VERSION: &str = "5.3";
+pub(crate) const JUPYTER_PROTOCOL_VERSION: &str = "5.3";
 const KERNEL_IMPLEMENTATION: &str = env!("CARGO_PKG_NAME");
 const KERNEL_IMPLEMENTATION_VERSION: &str = env!("CARGO_PKG_VERSION");
 
