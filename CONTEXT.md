@@ -9,16 +9,17 @@ interactive Typst evaluation with notebook-friendly display outputs.
 - Install a Jupyter kernelspec that launches this binary.
 - Maintain useful Typst context across cells without re-rendering previous
   visible content.
-- Support three execution modes:
-  - `eval`: evaluate Typst code and display `text/plain`.
-  - `svg`: render Typst markup as `image/svg+xml`.
+- Support two execution modes:
+  - `svg`: render Typst markup as notebook HTML containing per-page SVG.
   - `html`: render Typst markup as `text/html`.
+- Default page setup is `#set page(width: auto, height: auto, margin: 16pt)`.
+  CLI users can pass `--page-setup none` or custom Typst page setup code.
 
 ## Design Notes
 
 - Use `jupyter-protocol` for Jupyter message structures and MIME bundles.
 - Use `zeromq` for the kernel sockets.
-- Use Typst compiler crates for evaluation and rendering.
+- Use Typst compiler crates for rendering.
 - Tinymist DAP REPL is useful as a reference, but it does not persist console
   definitions, so this kernel owns its own session context.
 

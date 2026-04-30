@@ -34,9 +34,9 @@ struct StartArgs {
     /// Path to the Jupyter connection file.
     #[arg(short = 'f', long = "connection-file")]
     connection_file: PathBuf,
-    /// Page setup injected before each rendered cell: default, none, or Typst code.
-    #[arg(long, default_value = "default")]
-    page_setup: String,
+    /// Page setup injected before each rendered cell. Omit for `#set page(width: auto, height: auto, margin: 16pt)`, use `none` to disable, or pass Typst code.
+    #[arg(long)]
+    page_setup: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -69,7 +69,11 @@ async fn main() -> Result<()> {
 }
 
 async fn start_kernel(args: StartArgs) -> Result<()> {
-    kernel::run(args.connection_file, args.page_setup).await
+    kernel::run(
+        args.connection_file,
+        args.page_setup.unwrap_or_else(|| "default".to_string()),
+    )
+    .await
 }
 
 fn install_kernelspec(args: InstallArgs) -> Result<()> {
@@ -112,8 +116,6 @@ fn write_kernel_json(spec_dir: &Path, binary: &Path) -> Result<()> {
             "start".to_string(),
             "--connection-file".to_string(),
             "{connection_file}".to_string(),
-            "--page-setup".to_string(),
-            "default".to_string(),
         ],
         display_name: DISPLAY_NAME.to_string(),
         language: "typst".to_string(),
