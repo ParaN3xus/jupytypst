@@ -12,19 +12,22 @@ interactive Typst evaluation with notebook-friendly display outputs.
 - Support two execution modes:
   - `svg`: render Typst markup as notebook HTML containing per-page SVG.
   - `html`: render Typst markup as `text/html`.
-- Execute cells as Typst code mode by wrapping generated source in a top-level
-  `#{ ... }` block. Users write `let`, `set`, and function calls directly
-  without a leading `#`.
+- Execute cells as Typst code mode through `typst_eval::Vm`. Users write
+  `let`, `set`, and function calls directly without a leading `#`.
 - Default page setup is `set page(width: auto, height: auto, margin: 16pt)`.
   CLI users can pass `--page-setup none` or custom Typst page setup code.
-- `set page(...)` applies only to the cell where it appears; it is not stored
-  in cross-cell context.
+- Automatic page setup is evaluated as cell-local styles. User `set page(...)`
+  rules persist only for non-sizing fields; `paper`, `width`, and `height` are
+  filtered so the next rendered cell returns to the configured page sizing.
 
 ## Design Notes
 
 - Use `jupyter-protocol` for Jupyter message structures and MIME bundles.
 - Use `zeromq` for the kernel sockets.
-- Use Typst compiler crates for rendering.
+- Use lower-level Typst APIs for evaluation and rendering:
+  - Keep a persistent top-level `Scope` for definitions/imports.
+  - Capture top-level `Styles` from `set` and selector `show` rules.
+  - Render the current cell's evaluated `Content`, not accumulated source.
 - Tinymist DAP REPL is useful as a reference, but it does not persist console
   definitions, so this kernel owns its own session context.
 

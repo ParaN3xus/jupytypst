@@ -28,7 +28,12 @@ This repository implements `jupytypst`, a Rust Jupyter kernel for Typst.
   `set page(width: auto, height: auto, margin: 16pt)` before user code.
   `--page-setup none` disables this, and `--page-setup <Typst code>` overrides
   it.
-- Do not persist `set page(...)` between cells; page setup must reset for each
-  rendered cell unless the user disables automatic page setup.
-- Persist only top-level definition/configuration statements between cells:
-  `let`, `set`, `show`, `import`, and `include`.
+- Persist Typst execution state through the VM's top-level `Scope` and captured
+  top-level `Styles`, not by concatenating prior cell source.
+- Top-level `let`/imports update the persistent scope. Top-level selector
+  `show` rules and `set` rules update persistent styles.
+- Anonymous top-level `show: ...` rules are cell-local because they cannot be
+  replayed safely as persistent style recipes; emit a user-visible warning.
+- Page setup must reset for each rendered cell. Do not persist transient page
+  sizing fields: `page.paper`, `page.width`, and `page.height`. Other page
+  fields, such as `fill`, may persist.
