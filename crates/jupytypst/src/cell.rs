@@ -1,5 +1,5 @@
 use anyhow::{Result, anyhow};
-use typst_repl::RenderMode;
+use typsess::RenderMode;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct ParsedCell {

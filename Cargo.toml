@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/jupytypst", "crates/typst-repl"]
+members = ["crates/jupytypst", "crates/typsess"]
 resolver = "2"
 
 [workspace.package]
@@ -23,6 +23,6 @@ typst = "0.14.2"
 typst-eval = "0.14.2"
 typst-html = "0.14.2"
 typst-layout = "0.14.2"
-typst-repl = { path = "crates/typst-repl" }
+typsess = { path = "crates/typsess" }
 typst-svg = "0.14.2"
 uuid = { version = "1.23.1", features = ["v4"] }

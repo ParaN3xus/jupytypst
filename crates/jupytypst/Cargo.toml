@@ -6,11 +6,15 @@ edition.workspace = true
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
+ecow.workspace = true
 jupyter-protocol.workspace = true
 runtimelib.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 tokio.workspace = true
-typst-repl.workspace = true
+typst.workspace = true
+typst-html.workspace = true
+typst-svg.workspace = true
+typsess.workspace = true
 uuid.workspace = true

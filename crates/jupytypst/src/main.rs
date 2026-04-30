@@ -7,10 +7,11 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use jupyter_protocol::JupyterKernelspec;
 use tempfile::TempDir;
-use typst_repl::{PageSetup, RenderMode};
+use typsess::{PageSetup, RenderMode};
 
 mod cell;
 mod kernel;
+mod output;
 mod repl;
 
 const KERNEL_NAME: &str = "jupytypst";

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use jupyter_protocol::{
     CodeMirrorMode, CommInfoReply, CompleteReply, DisplayData, ErrorOutput, ExecuteInput,
     ExecuteReply, ExecutionCount, HistoryReply, InspectReply, IoPubWelcome, IsCompleteReply,
@@ -17,7 +17,8 @@ use uuid::Uuid;
 
 use crate::DISPLAY_NAME;
 use crate::cell::parse_cell;
-use typst_repl::{
+use crate::output::{execution_output_to_html, format_diagnostics};
+use typsess::{
     ExecutionOutput, InputStatus, PageSetup, RenderMode, TypstReplSession, classify_input,
 };
 
@@ -82,7 +83,8 @@ impl KernelServer {
             execution_count: ExecutionCount::new(0),
             iopub,
             shell: shell_writer,
-            typst: TypstReplSession::new(RenderMode::Svg, page_setup)?,
+            typst: TypstReplSession::new(RenderMode::Svg, page_setup)
+                .map_err(|diagnostics| anyhow!(format_diagnostics(diagnostics)))?,
             default_mode: RenderMode::Svg,
         };
         let shell_handle =
@@ -224,13 +226,22 @@ impl KernelServer {
             )
             .await?;
 
-        let cell = parse_cell(code, self.default_mode);
-        let reply = match cell.and_then(|cell| self.typst.execute_with_mode(&cell.body, cell.mode))
-        {
+        let result = match parse_cell(code, self.default_mode) {
+            Ok(cell) => self
+                .typst
+                .execute_with_mode(&cell.body, cell.mode)
+                .map_err(format_diagnostics),
+            Err(error) => Err(error.to_string()),
+        };
+
+        let reply = match result {
             Ok(result) => {
                 for warning in result.warnings {
                     self.iopub
-                        .send(StreamContent::stderr(&format!("{warning}\n")).as_child_of(parent))
+                        .send(
+                            StreamContent::stderr(&format!("{}\n", warning.message))
+                                .as_child_of(parent),
+                        )
                         .await?;
                 }
                 self.publish_output(result.output, parent).await?;
@@ -272,16 +283,16 @@ impl KernelServer {
         output: ExecutionOutput,
         parent: &JupyterMessage,
     ) -> Result<()> {
-        let media = match output {
-            ExecutionOutput::Svg(html) => Media::new(vec![
-                MediaType::Html(html),
-                MediaType::Plain("<svg>".to_string()),
-            ]),
-            ExecutionOutput::Html(html) => Media::new(vec![
-                MediaType::Html(html),
-                MediaType::Plain("<html>".to_string()),
-            ]),
+        let plain = match &output {
+            ExecutionOutput::Paged(_) => "<svg>",
+            ExecutionOutput::Html(_) => "<html>",
         };
+        let html = execution_output_to_html(output)
+            .map_err(|diagnostics| anyhow!(format_diagnostics(diagnostics)))?;
+        let media = Media::new(vec![
+            MediaType::Html(html),
+            MediaType::Plain(plain.to_string()),
+        ]);
         self.iopub
             .send(DisplayData::new(media).as_child_of(parent))
             .await?;

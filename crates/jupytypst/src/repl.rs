@@ -1,12 +1,13 @@
 use std::io::{self, Write};
 
-use anyhow::Result;
-use typst_repl::{
-    ExecutionOutput, InputStatus, PageSetup, RenderMode, TypstReplSession, classify_input,
-};
+use anyhow::{Result, anyhow};
+use typsess::{InputStatus, PageSetup, RenderMode, TypstReplSession, classify_input};
+
+use crate::output::{execution_output_to_html, format_diagnostics};
 
 pub fn run(mode: RenderMode, page_setup: PageSetup) -> Result<()> {
-    let mut session = TypstReplSession::new(mode, page_setup)?;
+    let mut session = TypstReplSession::new(mode, page_setup)
+        .map_err(|diagnostics| anyhow!(format_diagnostics(diagnostics)))?;
     let mut buffer = String::new();
     let stdin = io::stdin();
 
@@ -80,15 +81,15 @@ fn handle_command(
 }
 
 fn execute_buffer(session: &mut TypstReplSession, buffer: &str) -> Result<()> {
-    let result = session.execute(buffer)?;
+    let result = session
+        .execute(buffer)
+        .map_err(|diagnostics| anyhow!(format_diagnostics(diagnostics)))?;
     for warning in result.warnings {
-        eprintln!("{warning}");
+        eprintln!("{}", warning.message);
     }
-    match result.output {
-        ExecutionOutput::Html(html) | ExecutionOutput::Svg(html) => {
-            println!("{html}");
-        }
-    }
+    let html = execution_output_to_html(result.output)
+        .map_err(|diagnostics| anyhow!(format_diagnostics(diagnostics)))?;
+    println!("{html}");
     Ok(())
 }
 

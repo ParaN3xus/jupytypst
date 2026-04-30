@@ -1722,13 +1722,17 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "ecow",
  "jupyter-protocol",
  "runtimelib",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
- "typst-repl",
+ "typsess",
+ "typst",
+ "typst-html",
+ "typst-svg",
  "uuid",
 ]
 
@@ -3633,6 +3637,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40ce102ab67701b8526c123c1bab5cbe42d7040ccfd0f64af1a385808d2f43de"
 
 [[package]]
+name = "typsess"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "comemo",
+ "ecow",
+ "fontdb",
+ "tinymist-world",
+ "typst",
+ "typst-eval",
+ "typst-html",
+ "typst-layout",
+ "typst-svg",
+]
+
+[[package]]
 name = "typst"
 version = "0.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3829,22 +3849,6 @@ dependencies = [
  "typst-syntax",
  "typst-timing",
  "typst-utils",
-]
-
-[[package]]
-name = "typst-repl"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "comemo",
- "ecow",
- "fontdb",
- "tinymist-world",
- "typst",
- "typst-eval",
- "typst-html",
- "typst-layout",
- "typst-svg",
 ]
 
 [[package]]

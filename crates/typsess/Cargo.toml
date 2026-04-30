@@ -1,5 +1,5 @@
 [package]
-name = "typst-repl"
+name = "typsess"
 version.workspace = true
 edition.workspace = true
 
@@ -13,4 +13,6 @@ typst.workspace = true
 typst-eval.workspace = true
 typst-html.workspace = true
 typst-layout.workspace = true
+
+[dev-dependencies]
 typst-svg.workspace = true
