@@ -49,7 +49,7 @@ struct StartArgs {
     #[arg(short = 'f', long = "format", value_enum, default_value_t = CliOutputFormat::Svg)]
     format: CliOutputFormat,
     /// Source parsing mode for executed cells.
-    #[arg(long, value_enum, default_value_t = CliSourceMode::Code)]
+    #[arg(long, value_enum, default_value_t = CliSourceMode::Markup)]
     mode: CliSourceMode,
     #[command(flatten)]
     world: WorldArgs,
@@ -61,7 +61,7 @@ struct ReplArgs {
     #[arg(short = 'f', long = "format", value_enum, default_value_t = CliOutputFormat::Html)]
     format: CliOutputFormat,
     /// Source parsing mode for REPL input.
-    #[arg(long, value_enum, default_value_t = CliSourceMode::Code)]
+    #[arg(long, value_enum, default_value_t = CliSourceMode::Markup)]
     mode: CliSourceMode,
     /// Print complete HTML documents instead of only the body contents.
     #[arg(long)]

@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn top_level_text_set_persists_between_cells() {
-    let mut session = svg_session();
+    let mut session = code_svg_session();
     session.execute("set text(fill: red)\n[First]").unwrap();
     assert!(session_has_style_for(&session, "text", "fill"));
     assert!(svg_output(session.execute("[Second]").unwrap()).contains("<svg"));
@@ -10,7 +10,7 @@ fn top_level_text_set_persists_between_cells() {
 
 #[test]
 fn svg_mode_does_not_rerender_previous_visible_content() {
-    let mut session = svg_session();
+    let mut session = code_svg_session();
     session.execute("lorem(20)").unwrap();
 
     let output = session.execute("[Test]").unwrap();
@@ -21,14 +21,14 @@ fn svg_mode_does_not_rerender_previous_visible_content() {
 
 #[test]
 fn code_context_persists_without_hash_prefix() {
-    let mut session = svg_session();
+    let mut session = code_svg_session();
     session.execute("let f(a, b) = a + b").unwrap();
     assert!(svg_output(session.execute("f(1, 2)").unwrap()).contains("<svg"));
 }
 
 #[test]
 fn page_set_rules_do_not_persist_between_cells() {
-    let mut session = svg_session();
+    let mut session = code_svg_session();
     session.execute("set page(paper: \"a4\")\n[First]").unwrap();
 
     let svg = svg_output(session.execute("[Second]").unwrap());
@@ -87,7 +87,7 @@ fn page_setup_custom_initializes_persistent_styles() {
 
 #[test]
 fn current_cell_page_size_overrides_default_but_does_not_persist() {
-    let mut session = svg_session();
+    let mut session = code_svg_session();
     let initial_width_count = session_style_count_for(&session, "page", "width");
 
     let wide_svg = svg_output(
@@ -107,7 +107,7 @@ fn current_cell_page_size_overrides_default_but_does_not_persist() {
 
 #[test]
 fn page_fill_persists_but_page_width_does_not() {
-    let mut session = svg_session();
+    let mut session = code_svg_session();
     let initial_width_count = session_style_count_for(&session, "page", "width");
     session
         .execute("set page(width: 3cm, fill: red)\n[First]")
@@ -122,7 +122,7 @@ fn page_fill_persists_but_page_width_does_not() {
 
 #[test]
 fn anonymous_show_rules_persist_between_cells() {
-    let mut session = svg_session();
+    let mut session = code_svg_session();
     session.execute("show: it => emph(it)\n[First]").unwrap();
     assert!(session.styles.iter().any(|style| style.recipe().is_some()));
     assert!(svg_output(session.execute("[Second]").unwrap()).contains("<svg"));
@@ -130,7 +130,7 @@ fn anonymous_show_rules_persist_between_cells() {
 
 #[test]
 fn selector_show_rules_persist_between_cells() {
-    let mut session = svg_session();
+    let mut session = code_svg_session();
     session
         .execute("show regex(\"x\"): set text(fill: red)\n[x]")
         .unwrap();
@@ -140,7 +140,7 @@ fn selector_show_rules_persist_between_cells() {
 
 #[test]
 fn state_updates_persist_between_cells_without_visible_content() {
-    let mut session = html_session();
+    let mut session = code_html_session();
     let first = html_output(
         session
             .execute("let s = state(\"test\", \"init\")\ns.update(\"upd\")\ncontext s.get()")
@@ -156,7 +156,7 @@ fn state_updates_persist_between_cells_without_visible_content() {
 
 #[test]
 fn svg_mode_returns_multiple_structured_pages() {
-    let mut session = svg_session();
+    let mut session = code_svg_session();
     let output = session.execute("[x]\n\npagebreak()\n\n[x]").unwrap();
     match output.output {
         ExecutionOutput::Paged(document) => assert!(document.pages.len() >= 2),
@@ -166,7 +166,7 @@ fn svg_mode_returns_multiple_structured_pages() {
 
 #[test]
 fn execute_with_mode_renders_without_parsing_host_directives() {
-    let mut session = html_session();
+    let mut session = code_html_session();
     let html = html_output(session.execute_with_mode("[x]", RenderMode::Html).unwrap());
     assert!(html.contains("<p>x</p>"));
 
@@ -231,9 +231,18 @@ fn markup_mode_persists_definitions_with_hash_prefix() {
 }
 
 #[test]
+fn new_session_defaults_to_markup_mode() {
+    let mut session = TypstReplSession::new(RenderMode::Html, PageSetup::Default).unwrap();
+    let html = html_output(session.execute("Hello\n#let x = 1\n#x").unwrap());
+    assert!(html.contains("Hello"));
+    assert!(html.contains("1"));
+}
+
+#[test]
 fn world_inputs_are_visible_to_sys_inputs() {
-    let mut session = TypstReplSession::new_with_world_options(
+    let mut session = TypstReplSession::new_with_options(
         RenderMode::Html,
+        SourceMode::Code,
         PageSetup::Default,
         WorldOptions {
             inputs: vec![("name".into(), "typst".into())],
@@ -250,8 +259,9 @@ fn world_inputs_are_visible_to_sys_inputs() {
 fn world_root_controls_relative_imports() {
     let temp_dir = tempfile::tempdir().unwrap();
     std::fs::write(temp_dir.path().join("defs.typ"), "#let value = [Imported]").unwrap();
-    let mut session = TypstReplSession::new_with_world_options(
+    let mut session = TypstReplSession::new_with_options(
         RenderMode::Html,
+        SourceMode::Code,
         PageSetup::Default,
         WorldOptions {
             root: Some(temp_dir.path().to_path_buf()),
@@ -270,7 +280,7 @@ fn world_root_controls_relative_imports() {
 
 #[test]
 fn code_block_errors_keep_inner_expression_span() {
-    let mut session = html_session();
+    let mut session = code_html_session();
     let errors = session
         .execute("{\nstr(1 + 1)\npage.fill\n}")
         .expect_err("contextual page field access should fail outside context");
@@ -288,8 +298,24 @@ fn svg_session() -> TypstReplSession {
     TypstReplSession::new(RenderMode::Svg, PageSetup::Default).unwrap()
 }
 
-fn html_session() -> TypstReplSession {
-    TypstReplSession::new(RenderMode::Html, PageSetup::Default).unwrap()
+fn code_svg_session() -> TypstReplSession {
+    TypstReplSession::new_with_options(
+        RenderMode::Svg,
+        SourceMode::Code,
+        PageSetup::Default,
+        WorldOptions::default(),
+    )
+    .unwrap()
+}
+
+fn code_html_session() -> TypstReplSession {
+    TypstReplSession::new_with_options(
+        RenderMode::Html,
+        SourceMode::Code,
+        PageSetup::Default,
+        WorldOptions::default(),
+    )
+    .unwrap()
 }
 
 fn svg_output(result: ExecutionResult) -> String {

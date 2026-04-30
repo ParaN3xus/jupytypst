@@ -108,7 +108,7 @@ impl TypstReplSession {
     pub fn new(render_mode: RenderMode, page_setup: PageSetup) -> typst::diag::SourceResult<Self> {
         Self::new_with_options(
             render_mode,
-            SourceMode::Code,
+            SourceMode::Markup,
             page_setup,
             WorldOptions::default(),
         )
@@ -119,7 +119,7 @@ impl TypstReplSession {
         page_setup: PageSetup,
         world_options: WorldOptions,
     ) -> typst::diag::SourceResult<Self> {
-        Self::new_with_options(render_mode, SourceMode::Code, page_setup, world_options)
+        Self::new_with_options(render_mode, SourceMode::Markup, page_setup, world_options)
     }
 
     pub fn new_with_options(
