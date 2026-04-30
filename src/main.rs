@@ -8,6 +8,7 @@ use jupyter_protocol::JupyterKernelspec;
 use tempfile::TempDir;
 
 mod kernel;
+mod typst_session;
 
 const KERNEL_NAME: &str = "jupytypst";
 const DISPLAY_NAME: &str = "Typst (jupytypst)";

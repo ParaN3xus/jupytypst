@@ -2,10 +2,10 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use jupyter_protocol::{
-    CodeMirrorMode, CommInfoReply, CompleteReply, DisplayData, ExecuteInput, ExecuteReply,
-    ExecutionCount, HistoryReply, InspectReply, IoPubWelcome, IsCompleteReply,
+    CodeMirrorMode, CommInfoReply, CompleteReply, DisplayData, ErrorOutput, ExecuteInput,
+    ExecuteReply, ExecutionCount, HistoryReply, InspectReply, IoPubWelcome, IsCompleteReply,
     IsCompleteReplyStatus, JupyterMessage, JupyterMessageContent, KernelInfoReply, LanguageInfo,
-    Media, MediaType, ReplyStatus, ShutdownReply, Status,
+    Media, MediaType, ReplyError, ReplyStatus, ShutdownReply, Status,
 };
 use runtimelib::{
     RouterRecvConnection, RouterSendConnection, SubscriptionEvent,
@@ -16,6 +16,7 @@ use runtimelib::{
 use uuid::Uuid;
 
 use crate::DISPLAY_NAME;
+use crate::typst_session::{ExecutionOutput, TypstSession};
 
 pub async fn run(connection_file: PathBuf) -> Result<()> {
     let bytes = std::fs::read(&connection_file)
@@ -29,6 +30,7 @@ struct KernelServer {
     execution_count: ExecutionCount,
     iopub: runtimelib::KernelIoPubXPubConnection,
     shell: RouterSendConnection,
+    typst: TypstSession,
 }
 
 impl KernelServer {
@@ -72,6 +74,7 @@ impl KernelServer {
             execution_count: ExecutionCount::new(0),
             iopub,
             shell: shell_writer,
+            typst: TypstSession::new(),
         };
         let shell_handle =
             tokio::spawn(async move { kernel.shell_loop(shell_reader, shutdown_rx).await });
@@ -207,19 +210,61 @@ impl KernelServer {
             )
             .await?;
 
-        let data = Media::new(vec![MediaType::Plain(code.to_string())]);
-        self.iopub
-            .send(DisplayData::new(data).as_child_of(parent))
-            .await?;
-
-        let reply = ExecuteReply {
-            status: ReplyStatus::Ok,
-            execution_count,
-            payload: vec![],
-            user_expressions: None,
-            error: None,
+        let reply = match self.typst.execute(code) {
+            Ok(output) => {
+                self.publish_output(output, parent).await?;
+                ExecuteReply {
+                    status: ReplyStatus::Ok,
+                    execution_count,
+                    payload: vec![],
+                    user_expressions: None,
+                    error: None,
+                }
+            }
+            Err(error) => {
+                let evalue = error.to_string();
+                let error_output = ErrorOutput {
+                    ename: "TypstError".to_string(),
+                    evalue: evalue.clone(),
+                    traceback: vec![evalue.clone()],
+                };
+                self.iopub.send(error_output.as_child_of(parent)).await?;
+                ExecuteReply {
+                    status: ReplyStatus::Error,
+                    execution_count,
+                    payload: vec![],
+                    user_expressions: None,
+                    error: Some(Box::new(ReplyError {
+                        ename: "TypstError".to_string(),
+                        evalue,
+                        traceback: vec![],
+                    })),
+                }
+            }
         };
         self.shell.send(reply.as_child_of(parent)).await?;
+        Ok(())
+    }
+
+    async fn publish_output(
+        &mut self,
+        output: ExecutionOutput,
+        parent: &JupyterMessage,
+    ) -> Result<()> {
+        let media = match output {
+            ExecutionOutput::PlainText(text) => Media::new(vec![MediaType::Plain(text)]),
+            ExecutionOutput::Svg(svg) => Media::new(vec![
+                MediaType::Svg(svg),
+                MediaType::Plain("<svg>".to_string()),
+            ]),
+            ExecutionOutput::Html(html) => Media::new(vec![
+                MediaType::Html(html),
+                MediaType::Plain("<html>".to_string()),
+            ]),
+        };
+        self.iopub
+            .send(DisplayData::new(media).as_child_of(parent))
+            .await?;
         Ok(())
     }
 }
