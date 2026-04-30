@@ -64,4 +64,7 @@ reusable `typsess` library crate for stateful Typst code-mode execution.
 - `jupytypst repl` starts a terminal REPL backed by `typsess`.
 - The terminal REPL does not parse `// jupytypst:` directives. Its render mode
   is chosen once at startup with `--mode`, defaulting to `html`.
-- The REPL supports `.exit`, `.quit`, `.clear`, `.run`, and `.help`.
+- The REPL has no dot-command namespace; leading `.` is valid Typst code.
+- In a TTY, Ctrl-C clears the current input buffer, a second consecutive Ctrl-C
+  exits, Ctrl-D exits, and Shift+Enter force-submits the current input when the
+  terminal reports Shift+Enter distinctly.

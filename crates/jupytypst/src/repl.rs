@@ -1,8 +1,13 @@
 use std::io::{self, BufRead, IsTerminal, Write};
 
 use anyhow::{Result, anyhow};
-use rustyline::DefaultEditor;
+use rustyline::completion::Completer;
 use rustyline::error::ReadlineError;
+use rustyline::highlight::Highlighter;
+use rustyline::hint::Hinter;
+use rustyline::history::DefaultHistory;
+use rustyline::validate::{ValidationContext, ValidationResult, Validator};
+use rustyline::{Cmd, Editor, EventHandler, Helper, KeyCode, KeyEvent, Modifiers};
 use typsess::{InputStatus, PageSetup, RenderMode, TypstReplSession, classify_input};
 
 use crate::output::{execution_output_to_cli_html, format_diagnostics, format_diagnostics_rich};
@@ -13,33 +18,32 @@ pub fn run(mode: RenderMode, page_setup: PageSetup, full_html: bool) -> Result<(
     let mut buffer = String::new();
 
     if io::stdin().is_terminal() {
-        run_readline(&mut session, &mut buffer, full_html)
+        run_readline(&mut session, full_html)
     } else {
         run_plain(&mut session, &mut buffer, full_html)
     }
 }
 
-fn run_readline(
-    session: &mut TypstReplSession,
-    buffer: &mut String,
-    full_html: bool,
-) -> Result<()> {
-    let mut editor = DefaultEditor::new()?;
+fn run_readline(session: &mut TypstReplSession, full_html: bool) -> Result<()> {
+    let mut editor = Editor::<ReplHelper, DefaultHistory>::new()?;
+    editor.set_helper(Some(ReplHelper));
+    editor.bind_sequence(
+        KeyEvent(KeyCode::Enter, Modifiers::SHIFT),
+        EventHandler::Simple(Cmd::AcceptLine),
+    );
+    let mut interrupted = false;
     loop {
-        let prompt = if buffer.is_empty() {
-            "typst> "
-        } else {
-            "....> "
-        };
-        match editor.readline(prompt) {
+        match editor.readline("typst> ") {
             Ok(line) => {
+                interrupted = false;
                 let _ = editor.add_history_entry(line.as_str());
-                if handle_line(session, buffer, &line, full_html)? {
-                    break;
-                }
+                execute_buffer(session, &line, full_html);
             }
             Err(ReadlineError::Interrupted) => {
-                buffer.clear();
+                if interrupted {
+                    break;
+                }
+                interrupted = true;
             }
             Err(ReadlineError::Eof) => break,
             Err(error) => return Err(error.into()),
@@ -56,24 +60,18 @@ fn run_plain(session: &mut TypstReplSession, buffer: &mut String, full_html: boo
         if stdin.lock().read_line(&mut line)? == 0 {
             break;
         }
-        if handle_line(session, buffer, line.trim_end_matches('\n'), full_html)? {
-            break;
-        }
+        handle_plain_line(session, buffer, line.trim_end_matches('\n'), full_html);
         print_prompt(!buffer.is_empty());
     }
     Ok(())
 }
 
-fn handle_line(
+fn handle_plain_line(
     session: &mut TypstReplSession,
     buffer: &mut String,
     line: &str,
     full_html: bool,
-) -> Result<bool> {
-    if line.starts_with('.') {
-        return handle_command(line, buffer, session, full_html);
-    }
-
+) {
     buffer.push_str(line);
     buffer.push('\n');
     match classify_input(buffer) {
@@ -85,40 +83,6 @@ fn handle_line(
         InputStatus::Invalid(_) => {
             execute_buffer(session, buffer, full_html);
             buffer.clear();
-        }
-    }
-    Ok(false)
-}
-
-fn handle_command(
-    command: &str,
-    buffer: &mut String,
-    session: &mut TypstReplSession,
-    full_html: bool,
-) -> Result<bool> {
-    match command {
-        ".exit" | ".quit" => Ok(true),
-        ".clear" => {
-            buffer.clear();
-            Ok(false)
-        }
-        ".help" => {
-            eprintln!(".exit/.quit  exit the REPL");
-            eprintln!(".clear       clear the current input buffer");
-            eprintln!(".run         execute the current input buffer");
-            eprintln!(".help        show this help");
-            Ok(false)
-        }
-        ".run" => {
-            if !buffer.trim().is_empty() {
-                execute_buffer(session, buffer, full_html);
-                buffer.clear();
-            }
-            Ok(false)
-        }
-        other => {
-            eprintln!("unknown command `{other}`");
-            Ok(false)
         }
     }
 }
@@ -151,4 +115,27 @@ fn print_prompt(continuation: bool) {
         print!("typst> ");
     }
     let _ = io::stdout().flush();
+}
+
+struct ReplHelper;
+
+impl Helper for ReplHelper {}
+
+impl Completer for ReplHelper {
+    type Candidate = String;
+}
+
+impl Hinter for ReplHelper {
+    type Hint = String;
+}
+
+impl Highlighter for ReplHelper {}
+
+impl Validator for ReplHelper {
+    fn validate(&self, ctx: &mut ValidationContext) -> rustyline::Result<ValidationResult> {
+        match classify_input(ctx.input()) {
+            InputStatus::Incomplete(_) => Ok(ValidationResult::Incomplete),
+            InputStatus::Complete | InputStatus::Invalid(_) => Ok(ValidationResult::Valid(None)),
+        }
+    }
 }

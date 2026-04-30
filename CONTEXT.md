@@ -59,7 +59,11 @@ evaluation and rendering.
   default is `html` because SVG is awkward to view directly in a terminal.
 - `--page-setup` accepts the same values as the kernel: omitted/default, `none`,
   or custom Typst setup code.
-- Dot commands are `.exit`, `.quit`, `.clear`, `.run`, and `.help`.
+- The REPL has no dot-command namespace, so method chains starting with `.` are
+  passed through as Typst code.
+- In a TTY, Ctrl-C clears the current input buffer, a second consecutive Ctrl-C
+  exits, Ctrl-D exits, and Shift+Enter force-submits the current input when the
+  terminal reports Shift+Enter distinctly.
 
 ## Environment
 
