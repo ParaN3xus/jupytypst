@@ -1,16 +1,16 @@
 use std::io::{self, BufRead, IsTerminal, Write};
 
 use anyhow::{Result, anyhow};
-use rustyline::completion::Completer;
-use rustyline::error::ReadlineError;
-use rustyline::highlight::Highlighter;
-use rustyline::hint::Hinter;
-use rustyline::history::DefaultHistory;
-use rustyline::validate::{ValidationContext, ValidationResult, Validator};
-use rustyline::{Cmd, Editor, EventHandler, Helper, KeyCode, KeyEvent, Modifiers};
+use reedline::{
+    Emacs, KeyCode, KeyModifiers, Prompt, PromptEditMode, PromptHistorySearch,
+    PromptHistorySearchStatus, Reedline, ReedlineEvent, Signal, ValidationResult, Validator,
+    default_emacs_keybindings,
+};
 use typsess::{InputStatus, PageSetup, RenderMode, TypstReplSession, classify_input};
 
 use crate::output::{execution_output_to_cli_html, format_diagnostics, format_diagnostics_rich};
+
+const REPL_PROMPT_LABEL: &str = "typst";
 
 pub fn run(mode: RenderMode, page_setup: PageSetup, full_html: bool) -> Result<()> {
     let mut session = TypstReplSession::new(mode, page_setup)
@@ -25,30 +25,37 @@ pub fn run(mode: RenderMode, page_setup: PageSetup, full_html: bool) -> Result<(
 }
 
 fn run_readline(session: &mut TypstReplSession, full_html: bool) -> Result<()> {
-    let mut editor = Editor::<ReplHelper, DefaultHistory>::new()?;
-    editor.set_helper(Some(ReplHelper));
-    editor.bind_sequence(
-        KeyEvent(KeyCode::Enter, Modifiers::SHIFT),
-        EventHandler::Simple(Cmd::AcceptLine),
-    );
+    let mut keybindings = default_emacs_keybindings();
+    keybindings.add_binding(KeyModifiers::SHIFT, KeyCode::Enter, ReedlineEvent::Submit);
+    let edit_mode = Box::new(Emacs::new(keybindings));
+    let mut editor = Reedline::create()
+        .with_edit_mode(edit_mode)
+        .with_validator(Box::new(TypstValidator))
+        .use_kitty_keyboard_enhancement(true);
+    let prompt = TypstPrompt;
     let mut interrupted = false;
+
     loop {
-        match editor.readline("typst> ") {
-            Ok(line) => {
+        match editor.read_line(&prompt)? {
+            Signal::Success(buffer) => {
                 interrupted = false;
-                let _ = editor.add_history_entry(line.as_str());
-                execute_buffer(session, &line, full_html);
+                execute_buffer(session, &buffer, full_html);
             }
-            Err(ReadlineError::Interrupted) => {
+            Signal::CtrlC => {
                 if interrupted {
                     break;
                 }
                 interrupted = true;
             }
-            Err(ReadlineError::Eof) => break,
-            Err(error) => return Err(error.into()),
+            Signal::CtrlD => break,
+            Signal::ExternalBreak(buffer) => {
+                interrupted = false;
+                execute_buffer(session, &buffer, full_html);
+            }
+            _ => {}
         }
     }
+
     Ok(())
 }
 
@@ -110,32 +117,62 @@ fn execute_buffer(session: &mut TypstReplSession, buffer: &str, full_html: bool)
 
 fn print_prompt(continuation: bool) {
     if continuation {
-        print!("....> ");
+        print!("{}", continuation_prompt());
     } else {
-        print!("typst> ");
+        print!("{}", primary_prompt());
     }
     let _ = io::stdout().flush();
 }
 
-struct ReplHelper;
-
-impl Helper for ReplHelper {}
-
-impl Completer for ReplHelper {
-    type Candidate = String;
+fn primary_prompt() -> String {
+    format!("{REPL_PROMPT_LABEL}> ")
 }
 
-impl Hinter for ReplHelper {
-    type Hint = String;
+fn continuation_prompt() -> String {
+    format!("{}> ", ".".repeat(REPL_PROMPT_LABEL.chars().count()))
 }
 
-impl Highlighter for ReplHelper {}
+struct TypstValidator;
 
-impl Validator for ReplHelper {
-    fn validate(&self, ctx: &mut ValidationContext) -> rustyline::Result<ValidationResult> {
-        match classify_input(ctx.input()) {
-            InputStatus::Incomplete(_) => Ok(ValidationResult::Incomplete),
-            InputStatus::Complete | InputStatus::Invalid(_) => Ok(ValidationResult::Valid(None)),
+impl Validator for TypstValidator {
+    fn validate(&self, line: &str) -> ValidationResult {
+        match classify_input(line) {
+            InputStatus::Incomplete(_) => ValidationResult::Incomplete,
+            InputStatus::Complete | InputStatus::Invalid(_) => ValidationResult::Complete,
         }
+    }
+}
+
+struct TypstPrompt;
+
+impl Prompt for TypstPrompt {
+    fn render_prompt_left(&self) -> std::borrow::Cow<'_, str> {
+        std::borrow::Cow::Borrowed("")
+    }
+
+    fn render_prompt_right(&self) -> std::borrow::Cow<'_, str> {
+        std::borrow::Cow::Borrowed("")
+    }
+
+    fn render_prompt_indicator(&self, _prompt_mode: PromptEditMode) -> std::borrow::Cow<'_, str> {
+        std::borrow::Cow::Owned(primary_prompt())
+    }
+
+    fn render_prompt_multiline_indicator(&self) -> std::borrow::Cow<'_, str> {
+        std::borrow::Cow::Owned(continuation_prompt())
+    }
+
+    fn render_prompt_history_search_indicator(
+        &self,
+        history_search: PromptHistorySearch,
+    ) -> std::borrow::Cow<'_, str> {
+        let prefix = match history_search.status {
+            PromptHistorySearchStatus::Passing => "",
+            PromptHistorySearchStatus::Failing => "failing ",
+        };
+        std::borrow::Cow::Owned(format!(
+            "({prefix}reverse-search: {}) ",
+            history_search.term
+        ))
     }
 }
