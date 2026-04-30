@@ -83,7 +83,7 @@ fn svg_pages_html(document: &typst::layout::PagedDocument) -> String {
 
 fn format_diagnostic_rich(diagnostic: &SourceDiagnostic, source: &str) -> String {
     let severity = format!("{:?}", diagnostic.severity).to_lowercase();
-    let Some(range) = diagnostic.span.range() else {
+    let Some(range) = display_range(diagnostic, source) else {
         return format!("{severity}: {}", diagnostic.message);
     };
     let (line_index, column) = line_column(source, range.start);
@@ -94,15 +94,47 @@ fn format_diagnostic_rich(diagnostic: &SourceDiagnostic, source: &str) -> String
     let end = range.end.min(source.len()).min(line_end).max(start);
     let caret_width = usize::max(1, source[start..end].chars().count());
     let gutter = line_number.to_string();
-    let padding = " ".repeat(gutter.len());
     let caret_padding = " ".repeat(column);
     let carets = "^".repeat(caret_width);
+    let marker_indent = " ".repeat(gutter.len() + 1);
 
     format!(
-        "{severity}: {}\n  {padding}┌─ <stdin>:{line_number}:{}\n  {padding}│\n{line_number} │ {line}\n  {padding}│ {caret_padding}{carets}",
+        "{severity}: {}\n{marker_indent}┌─ <stdin>:{line_number}:{}\n{marker_indent}│\n{line_number} │ {line}\n{marker_indent}│ {caret_padding}{carets}",
         diagnostic.message,
         column + 1,
     )
+}
+
+fn display_range(diagnostic: &SourceDiagnostic, source: &str) -> Option<std::ops::Range<usize>> {
+    diagnostic_message_unknown_variable(&diagnostic.message)
+        .and_then(|name| find_identifier(source, name))
+        .or_else(|| diagnostic.span.range())
+}
+
+fn diagnostic_message_unknown_variable(message: &str) -> Option<&str> {
+    message.strip_prefix("unknown variable: ").map(str::trim)
+}
+
+fn find_identifier(source: &str, name: &str) -> Option<std::ops::Range<usize>> {
+    let mut matches = source.match_indices(name).filter_map(|(start, matched)| {
+        let end = start + matched.len();
+        is_identifier_boundary(source, start, end).then_some(start..end)
+    });
+    let first = matches.next()?;
+    if matches.next().is_some() {
+        return None;
+    }
+    Some(first)
+}
+
+fn is_identifier_boundary(source: &str, start: usize, end: usize) -> bool {
+    let before = source[..start].chars().next_back();
+    let after = source[end..].chars().next();
+    !before.is_some_and(is_identifier_char) && !after.is_some_and(is_identifier_char)
+}
+
+fn is_identifier_char(ch: char) -> bool {
+    ch == '_' || ch == '-' || ch.is_alphanumeric()
 }
 
 fn line_column(source: &str, byte_index: usize) -> (usize, usize) {
@@ -151,5 +183,21 @@ mod tests {
         assert!(formatted.contains("error: unknown variable: tests"));
         assert!(formatted.contains("1 │ tests"));
         assert!(formatted.contains("^^^^^"));
+        assert!(formatted.contains("  ┌─ <stdin>:1:1"));
+    }
+
+    #[test]
+    fn formats_unknown_variable_at_token_in_parenthesized_expression() {
+        let diagnostics = eco_vec![SourceDiagnostic::error(
+            Span::from_range(
+                typst::syntax::FileId::new(None, VirtualPath::new("/main.typ")),
+                0..9,
+            ),
+            "unknown variable: fdsf",
+        )];
+
+        let formatted = format_diagnostics_rich(diagnostics, "(\nfdsf\n)\n");
+        assert!(formatted.contains("2 │ fdsf"));
+        assert!(formatted.contains("  │ ^^^^"));
     }
 }
