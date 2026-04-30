@@ -7,15 +7,17 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use jupyter_protocol::JupyterKernelspec;
 use tempfile::TempDir;
-use typsess::{PageSetup, RenderMode, WorldOptions};
+use typsess::{PageSetup, RenderMode, SourceMode, WorldOptions};
 
 mod cell;
 mod kernel;
 mod output;
 mod repl;
 
-const KERNEL_NAME: &str = "jupytypst";
-const DISPLAY_NAME: &str = "Typst (Code Mode)";
+const CODE_KERNEL_NAME: &str = "jupytypst-code";
+const MARKUP_KERNEL_NAME: &str = "jupytypst-markup";
+const CODE_DISPLAY_NAME: &str = "Typst (Code Mode)";
+const MARKUP_DISPLAY_NAME: &str = "Typst";
 const ENV_PATH_SEP: char = if cfg!(windows) { ';' } else { ':' };
 
 #[derive(Debug, Parser)]
@@ -29,7 +31,7 @@ struct Cli {
 enum CommandKind {
     /// Start the Jupyter kernel.
     Start(StartArgs),
-    /// Start an interactive Typst code-mode REPL.
+    /// Start an interactive Typst REPL.
     Repl(ReplArgs),
     /// Install the Jupyter kernelspec for this binary.
     Install(InstallArgs),
@@ -46,6 +48,9 @@ struct StartArgs {
     /// The format of rendered kernel output.
     #[arg(short = 'f', long = "format", value_enum, default_value_t = CliOutputFormat::Svg)]
     format: CliOutputFormat,
+    /// Source parsing mode for executed cells.
+    #[arg(long, value_enum, default_value_t = CliSourceMode::Code)]
+    mode: CliSourceMode,
     #[command(flatten)]
     world: WorldArgs,
 }
@@ -55,6 +60,9 @@ struct ReplArgs {
     /// The format of rendered terminal output.
     #[arg(short = 'f', long = "format", value_enum, default_value_t = CliOutputFormat::Html)]
     format: CliOutputFormat,
+    /// Source parsing mode for REPL input.
+    #[arg(long, value_enum, default_value_t = CliSourceMode::Code)]
+    mode: CliSourceMode,
     /// Print complete HTML documents instead of only the body contents.
     #[arg(long)]
     full_html: bool,
@@ -71,6 +79,44 @@ enum CliOutputFormat {
     Png,
     Svg,
     Html,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum CliSourceMode {
+    Code,
+    Markup,
+}
+
+impl From<CliSourceMode> for SourceMode {
+    fn from(value: CliSourceMode) -> Self {
+        match value {
+            CliSourceMode::Code => Self::Code,
+            CliSourceMode::Markup => Self::Markup,
+        }
+    }
+}
+
+impl CliSourceMode {
+    fn kernel_name(self) -> &'static str {
+        match self {
+            Self::Code => CODE_KERNEL_NAME,
+            Self::Markup => MARKUP_KERNEL_NAME,
+        }
+    }
+
+    fn display_name(self) -> &'static str {
+        match self {
+            Self::Code => CODE_DISPLAY_NAME,
+            Self::Markup => MARKUP_DISPLAY_NAME,
+        }
+    }
+
+    fn language(self) -> &'static str {
+        match self {
+            Self::Code => "typst-code",
+            Self::Markup => "typst",
+        }
+    }
 }
 
 impl TryFrom<CliOutputFormat> for RenderMode {
@@ -177,6 +223,7 @@ async fn start_kernel(args: StartArgs) -> Result<()> {
         args.connection_file,
         args.page_setup.unwrap_or_else(|| "default".to_string()),
         args.format.try_into()?,
+        args.mode.into(),
         args.world.into(),
     )
     .await
@@ -186,6 +233,7 @@ fn start_repl(args: ReplArgs) -> Result<()> {
     let page_setup = parse_page_setup(args.page_setup)?;
     repl::run(
         args.format.try_into()?,
+        args.mode.into(),
         page_setup,
         args.full_html,
         args.world.into(),
@@ -210,20 +258,27 @@ fn parse_input_pair(raw: &str) -> Result<(String, String), String> {
 fn install_kernelspec(args: InstallArgs) -> Result<()> {
     let binary = std::env::current_exe().context("failed to locate current executable")?;
     let temp_dir = TempDir::new().context("failed to create temporary kernelspec directory")?;
-    let spec_dir = temp_dir.path().join(KERNEL_NAME);
-    fs::create_dir(&spec_dir).context("failed to create kernelspec staging directory")?;
-    write_kernel_json(&spec_dir, &binary)?;
+    for mode in [CliSourceMode::Code, CliSourceMode::Markup] {
+        let spec_dir = temp_dir.path().join(mode.kernel_name());
+        fs::create_dir(&spec_dir).context("failed to create kernelspec staging directory")?;
+        write_kernel_json(&spec_dir, &binary, mode)?;
+        install_one_kernelspec(&args, &spec_dir, mode.kernel_name())?;
+    }
 
+    Ok(())
+}
+
+fn install_one_kernelspec(args: &InstallArgs, spec_dir: &Path, name: &str) -> Result<()> {
     let mut command = Command::new(&args.jupyter);
-    command.arg("kernelspec").arg("install").arg(&spec_dir);
-    command.arg("--name").arg(KERNEL_NAME);
+    command.arg("kernelspec").arg("install").arg(spec_dir);
+    command.arg("--name").arg(name);
     if args.user {
         command.arg("--user");
     }
     if args.sys_prefix {
         command.arg("--sys-prefix");
     }
-    if let Some(prefix) = args.prefix {
+    if let Some(prefix) = &args.prefix {
         command.arg("--prefix").arg(prefix);
     }
     if args.replace {
@@ -240,16 +295,21 @@ fn install_kernelspec(args: InstallArgs) -> Result<()> {
     Ok(())
 }
 
-fn write_kernel_json(spec_dir: &Path, binary: &Path) -> Result<()> {
+fn write_kernel_json(spec_dir: &Path, binary: &Path, mode: CliSourceMode) -> Result<()> {
     let kernelspec = JupyterKernelspec {
         argv: vec![
             binary.display().to_string(),
             "start".to_string(),
             "--connection-file".to_string(),
             "{connection_file}".to_string(),
+            "--mode".to_string(),
+            mode.to_possible_value()
+                .expect("source mode should have a clap value")
+                .get_name()
+                .to_string(),
         ],
-        display_name: DISPLAY_NAME.to_string(),
-        language: "typst-code".to_string(),
+        display_name: mode.display_name().to_string(),
+        language: mode.language().to_string(),
         metadata: Some(HashMap::new()),
         interrupt_mode: Some("message".to_string()),
         env: Some(HashMap::new()),

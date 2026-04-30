@@ -15,12 +15,12 @@ use runtimelib::{
 };
 use uuid::Uuid;
 
-use crate::DISPLAY_NAME;
 use crate::cell::parse_cell;
 use crate::output::{execution_output_to_html, format_diagnostics};
+use crate::{CODE_DISPLAY_NAME, MARKUP_DISPLAY_NAME};
 use typsess::{
-    ExecutionOutput, InputStatus, PageSetup, RenderMode, TypstReplSession, WorldOptions,
-    classify_input,
+    ExecutionOutput, InputStatus, PageSetup, RenderMode, SourceMode, TypstReplSession,
+    WorldOptions, classify_input,
 };
 
 pub(crate) const JUPYTER_PROTOCOL_VERSION: &str = "5.3";
@@ -31,6 +31,7 @@ pub async fn run(
     connection_file: PathBuf,
     page_setup: String,
     default_mode: RenderMode,
+    source_mode: SourceMode,
     world_options: WorldOptions,
 ) -> Result<()> {
     let bytes = std::fs::read(&connection_file)
@@ -38,7 +39,14 @@ pub async fn run(
     let connection_info =
         serde_json::from_slice(&bytes).context("failed to parse connection file")?;
     let page_setup = PageSetup::parse(&page_setup)?;
-    KernelServer::run(connection_info, page_setup, default_mode, world_options).await
+    KernelServer::run(
+        connection_info,
+        page_setup,
+        default_mode,
+        source_mode,
+        world_options,
+    )
+    .await
 }
 
 struct KernelServer {
@@ -47,6 +55,7 @@ struct KernelServer {
     shell: RouterSendConnection,
     typst: TypstReplSession,
     default_mode: RenderMode,
+    source_mode: SourceMode,
 }
 
 impl KernelServer {
@@ -54,6 +63,7 @@ impl KernelServer {
         connection_info: jupyter_protocol::ConnectionInfo,
         page_setup: PageSetup,
         default_mode: RenderMode,
+        source_mode: SourceMode,
         world_options: WorldOptions,
     ) -> Result<()> {
         let session_id = Uuid::new_v4().to_string();
@@ -73,7 +83,9 @@ impl KernelServer {
             while let Ok(message) = control.read().await {
                 match &message.content {
                     JupyterMessageContent::KernelInfoRequest(_) => {
-                        let _ = control.send(kernel_info().as_child_of(&message)).await;
+                        let _ = control
+                            .send(kernel_info(source_mode).as_child_of(&message))
+                            .await;
                     }
                     JupyterMessageContent::ShutdownRequest(req) => {
                         let reply = ShutdownReply {
@@ -95,13 +107,15 @@ impl KernelServer {
             execution_count: ExecutionCount::new(0),
             iopub,
             shell: shell_writer,
-            typst: TypstReplSession::new_with_world_options(
+            typst: TypstReplSession::new_with_options(
                 default_mode,
+                source_mode,
                 page_setup,
                 world_options,
             )
             .map_err(|diagnostics| anyhow!(format_diagnostics(diagnostics)))?,
             default_mode,
+            source_mode,
         };
         let shell_handle =
             tokio::spawn(async move { kernel.shell_loop(shell_reader, shutdown_rx).await });
@@ -159,7 +173,9 @@ impl KernelServer {
 
         match &parent.content {
             JupyterMessageContent::KernelInfoRequest(_) => {
-                self.shell.send(kernel_info().as_child_of(parent)).await?;
+                self.shell
+                    .send(kernel_info(self.source_mode).as_child_of(parent))
+                    .await?;
             }
             JupyterMessageContent::ExecuteRequest(request) => {
                 self.handle_execute_request(&request.code, parent).await?;
@@ -186,7 +202,7 @@ impl KernelServer {
                 self.shell.send(reply.as_child_of(parent)).await?;
             }
             JupyterMessageContent::IsCompleteRequest(request) => {
-                let status = match classify_input(&request.code) {
+                let status = match classify_input(&request.code, self.source_mode) {
                     InputStatus::Complete => IsCompleteReplyStatus::Complete,
                     InputStatus::Incomplete(_) => IsCompleteReplyStatus::Incomplete,
                     InputStatus::Invalid(_) => IsCompleteReplyStatus::Invalid,
@@ -316,24 +332,49 @@ impl KernelServer {
     }
 }
 
-fn kernel_info() -> KernelInfoReply {
+fn kernel_info(source_mode: SourceMode) -> KernelInfoReply {
+    let language = language_metadata(source_mode);
     KernelInfoReply {
         status: ReplyStatus::Ok,
         protocol_version: JUPYTER_PROTOCOL_VERSION.to_string(),
         implementation: KERNEL_IMPLEMENTATION.to_string(),
         implementation_version: KERNEL_IMPLEMENTATION_VERSION.to_string(),
         language_info: LanguageInfo {
-            name: "typst-code".to_string(),
+            name: language.name.to_string(),
             version: typst::syntax::package::PackageVersion::compiler().to_string(),
-            mimetype: Some("text/x-typst-code".to_string()),
-            file_extension: Some(".typc".to_string()),
-            pygments_lexer: Some("typst-code".to_string()),
-            codemirror_mode: Some(CodeMirrorMode::Simple("typst-code".to_string())),
+            mimetype: Some(language.mimetype.to_string()),
+            file_extension: Some(language.file_extension.to_string()),
+            pygments_lexer: Some(language.name.to_string()),
+            codemirror_mode: Some(CodeMirrorMode::Simple(language.name.to_string())),
             nbconvert_exporter: None,
         },
-        banner: DISPLAY_NAME.to_string(),
+        banner: language.display_name.to_string(),
         help_links: vec![],
         debugger: false,
         error: None,
+    }
+}
+
+struct LanguageMetadata {
+    name: &'static str,
+    display_name: &'static str,
+    mimetype: &'static str,
+    file_extension: &'static str,
+}
+
+fn language_metadata(source_mode: SourceMode) -> LanguageMetadata {
+    match source_mode {
+        SourceMode::Code => LanguageMetadata {
+            name: "typst-code",
+            display_name: CODE_DISPLAY_NAME,
+            mimetype: "text/x-typst-code",
+            file_extension: ".typc",
+        },
+        SourceMode::Markup => LanguageMetadata {
+            name: "typst",
+            display_name: MARKUP_DISPLAY_NAME,
+            mimetype: "text/x-typst",
+            file_extension: ".typ",
+        },
     }
 }

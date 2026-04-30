@@ -1,4 +1,6 @@
-use typst::syntax::parse_code;
+use typst::syntax::{Source, parse_code};
+
+use crate::SourceMode;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InputStatus {
@@ -7,8 +9,11 @@ pub enum InputStatus {
     Invalid(String),
 }
 
-pub fn classify_input(source: &str) -> InputStatus {
-    let errors = parse_code(source).errors();
+pub fn classify_input(source: &str, mode: SourceMode) -> InputStatus {
+    let errors = match mode {
+        SourceMode::Code => parse_code(source).errors(),
+        SourceMode::Markup => Source::detached(source).root().errors(),
+    };
     if errors.is_empty() {
         return InputStatus::Complete;
     }

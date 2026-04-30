@@ -176,14 +176,20 @@ fn execute_with_mode_renders_without_parsing_host_directives() {
 
 #[test]
 fn classifies_complete_input() {
-    assert_eq!(classify_input("let x = 1"), InputStatus::Complete);
+    assert_eq!(
+        classify_input("let x = 1", SourceMode::Code),
+        InputStatus::Complete
+    );
 }
 
 #[test]
 fn classifies_incomplete_input() {
-    assert!(matches!(classify_input("("), InputStatus::Incomplete(_)));
     assert!(matches!(
-        classify_input("\"abc"),
+        classify_input("(", SourceMode::Code),
+        InputStatus::Incomplete(_)
+    ));
+    assert!(matches!(
+        classify_input("\"abc", SourceMode::Code),
         InputStatus::Incomplete(_)
     ));
 }
@@ -191,9 +197,37 @@ fn classifies_incomplete_input() {
 #[test]
 fn classifies_invalid_input() {
     assert!(matches!(
-        classify_input("let x = 1 2"),
+        classify_input("let x = 1 2", SourceMode::Code),
         InputStatus::Invalid(_)
     ));
+}
+
+#[test]
+fn markup_mode_executes_markup_source() {
+    let mut session = TypstReplSession::new_with_options(
+        RenderMode::Html,
+        SourceMode::Markup,
+        PageSetup::Default,
+        WorldOptions::default(),
+    )
+    .unwrap();
+    let html = html_output(session.execute("Hello\n#let x = 1\n#x").unwrap());
+    assert!(html.contains("Hello"));
+    assert!(html.contains("1"));
+}
+
+#[test]
+fn markup_mode_persists_definitions_with_hash_prefix() {
+    let mut session = TypstReplSession::new_with_options(
+        RenderMode::Html,
+        SourceMode::Markup,
+        PageSetup::Default,
+        WorldOptions::default(),
+    )
+    .unwrap();
+    session.execute("#let f(a, b) = a + b").unwrap();
+    let html = html_output(session.execute("#f(1, 2)").unwrap());
+    assert!(html.contains("3"));
 }
 
 #[test]
