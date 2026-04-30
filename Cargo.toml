@@ -9,16 +9,15 @@ clap = { version = "4.6.1", features = ["derive"] }
 comemo = "0.5.1"
 ecow = "0.2.6"
 jupyter-protocol = "2.0.0"
-parking_lot = "0.12.5"
 runtimelib = { version = "2.0.0", features = ["tokio-runtime"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 tempfile = "3.27.0"
+tinymist-world = { path = "local/tinymist/crates/tinymist-world", features = ["system"] }
 tokio = { version = "1.52.1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
 typst = "0.14.2"
 typst-eval = "0.14.2"
 typst-html = "0.14.2"
-typst-kit = "0.14.2"
 typst-layout = "0.14.2"
 typst-svg = "0.14.2"
 uuid = { version = "1.23.1", features = ["v4"] }

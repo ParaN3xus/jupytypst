@@ -25,6 +25,9 @@ interactive Typst evaluation with notebook-friendly display outputs.
 
 - Use `jupyter-protocol` for Jupyter message structures and MIME bundles.
 - Use `zeromq` for the kernel sockets.
+- Use `tinymist-world` for Typst's `World` implementation so package imports,
+  filesystem resolution, font discovery, and package cache behavior match
+  Tinymist's system environment.
 - Use lower-level Typst APIs for evaluation and rendering:
   - Keep a persistent top-level `Scope` for definitions/imports.
   - Capture top-level `Styles` from `set` and selector `show` rules.

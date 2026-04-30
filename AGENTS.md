@@ -16,6 +16,9 @@ This repository implements `jupytypst`, a Rust Jupyter kernel for Typst.
 - `local/typst` contains the Typst compiler/exporter reference source.
 - `local/tinymist` contains the Tinymist LSP/DAP reference source.
 - Keep reference-source use read-only unless the user explicitly asks otherwise.
+- The kernel uses `tinymist-world` as its Typst `World` implementation for
+  package imports, filesystem access, and font discovery. Avoid reintroducing a
+  local ad hoc `World` unless the Tinymist API cannot support the needed case.
 
 ## Kernel Behavior
 

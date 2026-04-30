@@ -1,25 +1,23 @@
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use comemo::{Constraint, Track};
-use ecow::{EcoVec, eco_format, eco_vec};
-use parking_lot::Mutex;
-use typst::diag::{At, FileError, FileResult, SourceDiagnostic};
+use ecow::{EcoVec, eco_vec};
+use tinymist_world::args::CompileFontArgs;
+use tinymist_world::system::{SystemUniverseBuilder, TypstSystemWorld};
+use tinymist_world::{EntryState, ShadowApi};
+use typst::World;
+use typst::diag::{At, SourceDiagnostic};
 use typst::engine::{Engine, Route, Sink, Traced};
 use typst::foundations::{
-    Bytes, Content, Context, Datetime, Element, Scope, Scopes, Selector, Style, StyleChain, Styles,
-    Target, TargetElem, Value, ops,
+    Bytes, Content, Context, Element, Scope, Scopes, Selector, Style, StyleChain, Styles, Target,
+    TargetElem, Value, ops,
 };
 use typst::introspection::{Counter, Introspector, State};
 use typst::layout::{PageElem, PagedDocument};
-use typst::syntax::{FileId, Source, Span, VirtualPath, ast, ast::AstNode, parse_code};
-use typst::text::{Font, FontBook};
-use typst::utils::LazyHash;
-use typst::{Feature, Features, Library, LibraryExt, World};
+use typst::syntax::{Span, VirtualPath, ast, ast::AstNode, parse_code};
 use typst_eval::{Eval, Vm};
-use typst_kit::fonts::{FontSlot, Fonts};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -76,20 +74,18 @@ pub struct TypstSession {
     scope: Scope,
     styles: Styles,
     introspection_updates: Vec<Content>,
-    world: Arc<SessionWorld>,
+    world: TypstSystemWorld,
 }
 
 impl TypstSession {
     pub fn new(page_setup: PageSetup) -> Result<Self> {
-        let mut searcher = Fonts::searcher();
-        let fonts = searcher.search();
-        let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let world = create_world()?;
         let mut session = Self {
             mode: Mode::Svg,
             scope: Scope::new(),
             styles: Styles::new(),
             introspection_updates: Vec::new(),
-            world: Arc::new(SessionWorld::new(&root, fonts.clone_for_world())),
+            world,
         };
         session.initialize_page_setup(page_setup)?;
         Ok(session)
@@ -138,11 +134,13 @@ impl TypstSession {
     }
 
     fn evaluate_source(
-        &self,
+        &mut self,
         source: &str,
         style_capture: StyleCapture,
     ) -> Result<EvaluatedSource> {
-        self.world.replace_source(source);
+        self.world
+            .map_shadow_by_id(self.world.main(), Bytes::from_string(source.to_string()))
+            .map_err(|error| anyhow!("failed to update Typst main source: {error}"))?;
 
         let span = Span::from_range(self.world.main(), 0..source.len());
         let mut root = parse_code(source);
@@ -158,19 +156,20 @@ impl TypstSession {
         let mut sink = Sink::new();
         let mut captured_styles = Styles::new();
         let mut warnings = Vec::new();
+        let world = self.world.html_task();
         let (value, new_scope, sink_warnings) = {
             let introspector = Introspector::default();
             let traced = Traced::default();
             let engine = Engine {
                 routines: &typst::ROUTINES,
-                world: (self.world.as_ref() as &dyn World).track(),
+                world: (world.as_ref() as &dyn World).track(),
                 introspector: introspector.track(),
                 traced: traced.track(),
                 sink: sink.track_mut(),
                 route: Route::default(),
             };
             let context = Context::none();
-            let mut scopes = Scopes::new(Some(self.world.library()));
+            let mut scopes = Scopes::new(Some(world.library()));
             scopes.top = self.scope.clone();
             let mut vm = Vm::new(engine, context.track(), scopes, root.span());
             let value = eval_code_capture(
@@ -200,14 +199,16 @@ impl TypstSession {
     }
 
     fn render_svg(&self, content: Content) -> Result<ExecutionOutput> {
+        let world = self.world.paged_task();
         let document =
-            layout_paged_document(self.world.as_ref(), &content).map_err(format_diagnostics)?;
+            layout_paged_document(world.as_ref(), &content).map_err(format_diagnostics)?;
         Ok(ExecutionOutput::Svg(svg_pages_html(&document)))
     }
 
     fn render_html(&self, content: Content) -> Result<ExecutionOutput> {
+        let world = self.world.html_task();
         let document =
-            layout_html_document(self.world.as_ref(), &content).map_err(format_diagnostics)?;
+            layout_html_document(world.as_ref(), &content).map_err(format_diagnostics)?;
         Ok(ExecutionOutput::Html(
             typst_html::html(&document).map_err(format_diagnostics)?,
         ))
@@ -537,105 +538,17 @@ fn svg_pages_html(document: &PagedDocument) -> String {
     )
 }
 
-struct WorldFonts {
-    book: FontBook,
-    fonts: Vec<FontSlot>,
-}
-
-trait CloneForWorld {
-    fn clone_for_world(&self) -> WorldFonts;
-}
-
-impl CloneForWorld for Fonts {
-    fn clone_for_world(&self) -> WorldFonts {
-        let mut searcher = Fonts::searcher();
-        let fonts = searcher.search();
-        WorldFonts {
-            book: fonts.book,
-            fonts: fonts.fonts,
-        }
-    }
-}
-
-struct SessionWorld {
-    root: PathBuf,
-    main: FileId,
-    source: Mutex<Source>,
-    library: LazyHash<Library>,
-    book: LazyHash<FontBook>,
-    fonts: Vec<FontSlot>,
-    files: Mutex<std::collections::HashMap<FileId, Bytes>>,
-}
-
-impl SessionWorld {
-    fn new(root: &Path, fonts: WorldFonts) -> Self {
-        let main = FileId::new_fake(VirtualPath::new("/main.typ"));
-        let library = Library::builder()
-            .with_features(Features::from_iter([Feature::Html]))
-            .build();
-        Self {
-            root: root.to_path_buf(),
-            main,
-            source: Mutex::new(Source::new(main, String::new())),
-            library: LazyHash::new(library),
-            book: LazyHash::new(fonts.book),
-            fonts: fonts.fonts,
-            files: Mutex::new(Default::default()),
-        }
-    }
-
-    fn resolve(&self, id: FileId) -> FileResult<PathBuf> {
-        id.vpath()
-            .resolve(&self.root)
-            .ok_or_else(|| FileError::Other(Some(eco_format!("path escapes project root"))))
-    }
-
-    fn replace_source(&self, source: &str) {
-        self.source.lock().replace(source);
-    }
-}
-
-impl World for SessionWorld {
-    fn library(&self) -> &LazyHash<Library> {
-        &self.library
-    }
-
-    fn book(&self) -> &LazyHash<FontBook> {
-        &self.book
-    }
-
-    fn main(&self) -> FileId {
-        self.main
-    }
-
-    fn source(&self, id: FileId) -> FileResult<Source> {
-        if id == self.main {
-            return Ok(self.source.lock().clone());
-        }
-        let path = self.resolve(id)?;
-        let text =
-            std::fs::read_to_string(&path).map_err(|error| FileError::from_io(error, &path))?;
-        Ok(Source::new(id, text))
-    }
-
-    fn file(&self, id: FileId) -> FileResult<Bytes> {
-        if let Some(bytes) = self.files.lock().get(&id) {
-            return Ok(bytes.clone());
-        }
-        let path = self.resolve(id)?;
-        let bytes =
-            Bytes::new(std::fs::read(&path).map_err(|error| FileError::from_io(error, &path))?);
-        self.files.lock().insert(id, bytes.clone());
-        Ok(bytes)
-    }
-
-    fn font(&self, index: usize) -> Option<Font> {
-        self.fonts.get(index)?.get()
-    }
-
-    fn today(&self, _offset: Option<i64>) -> Option<Datetime> {
-        None
-    }
+fn create_world() -> Result<TypstSystemWorld> {
+    let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let entry = EntryState::new_rooted(
+        root.into(),
+        Some(VirtualPath::new(Path::new("/__jupytypst__.typ"))),
+    );
+    let fonts = SystemUniverseBuilder::resolve_fonts(CompileFontArgs::default())?;
+    let package_registry = SystemUniverseBuilder::resolve_package(None, None);
+    let universe =
+        SystemUniverseBuilder::build(entry, Default::default(), fonts.into(), package_registry);
+    Ok(universe.snapshot())
 }
 
 #[cfg(test)]
