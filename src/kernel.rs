@@ -78,7 +78,7 @@ impl KernelServer {
             execution_count: ExecutionCount::new(0),
             iopub,
             shell: shell_writer,
-            typst: TypstSession::new(page_setup),
+            typst: TypstSession::new(page_setup)?,
         };
         let shell_handle =
             tokio::spawn(async move { kernel.shell_loop(shell_reader, shutdown_rx).await });

@@ -72,24 +72,24 @@ pub struct ExecutionResult {
 
 pub struct TypstSession {
     mode: Mode,
-    page_setup: PageSetup,
     scope: Scope,
     styles: Styles,
     world: Arc<SessionWorld>,
 }
 
 impl TypstSession {
-    pub fn new(page_setup: PageSetup) -> Self {
+    pub fn new(page_setup: PageSetup) -> Result<Self> {
         let mut searcher = Fonts::searcher();
         let fonts = searcher.search();
         let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        Self {
+        let mut session = Self {
             mode: Mode::Svg,
-            page_setup,
             scope: Scope::new(),
             styles: Styles::new(),
             world: Arc::new(SessionWorld::new(&root, fonts.clone_for_world())),
-        }
+        };
+        session.initialize_page_setup(page_setup)?;
+        Ok(session)
     }
 
     pub fn execute(&mut self, source: &str) -> Result<ExecutionResult> {
@@ -106,15 +106,16 @@ impl TypstSession {
         })
     }
 
-    fn evaluate_code(&mut self, code: &str) -> Result<EvaluatedCell> {
-        let mut setup_styles = Styles::new();
-        if let Some(page_setup) = self.page_setup.code() {
+    fn initialize_page_setup(&mut self, page_setup: PageSetup) -> Result<()> {
+        if let Some(page_setup) = page_setup.code() {
             let setup = normalize_code_statement(page_setup);
-            setup_styles = self
-                .evaluate_source(setup, StyleCapture::Local)?
-                .captured_styles;
+            let evaluated = self.evaluate_source(setup, StyleCapture::Local)?;
+            self.styles.apply(evaluated.captured_styles);
         }
+        Ok(())
+    }
 
+    fn evaluate_code(&mut self, code: &str) -> Result<EvaluatedCell> {
         let evaluated = self.evaluate_source(code, StyleCapture::Persistent)?;
         self.scope = evaluated.scope;
         self.styles.apply(evaluated.captured_styles);
@@ -122,7 +123,6 @@ impl TypstSession {
         let content = evaluated
             .value
             .display()
-            .styled_with_map(setup_styles)
             .styled_with_map(self.styles.clone());
 
         Ok(EvaluatedCell {
@@ -206,22 +206,11 @@ impl TypstSession {
             typst_html::html(&document).map_err(format_diagnostics)?,
         ))
     }
-
-    #[cfg(test)]
-    fn cell_source(&self, code: &str) -> CellSource {
-        let mut source = String::new();
-        if let Some(page_setup) = self.page_setup.code() {
-            source.push_str(normalize_code_statement(page_setup));
-            source.push('\n');
-        }
-        source.push_str(code);
-        CellSource { source }
-    }
 }
 
 impl Default for TypstSession {
     fn default() -> Self {
-        Self::new(PageSetup::Default)
+        Self::new(PageSetup::Default).expect("default page setup should be valid")
     }
 }
 
@@ -262,11 +251,6 @@ fn parse_directive(rest: &str) -> Result<Mode> {
         "html" => Ok(Mode::Html),
         other => Err(anyhow!("unsupported jupytypst mode `{other}`")),
     }
-}
-
-#[cfg(test)]
-struct CellSource {
-    source: String,
 }
 
 fn normalize_code_statement(code: &str) -> &str {
@@ -693,16 +677,17 @@ mod tests {
     }
 
     #[test]
-    fn page_setup_default_is_injected() {
+    fn page_setup_default_initializes_persistent_styles() {
         let session = TypstSession::default();
-        let source = session.cell_source("[Test]").source;
-        assert!(source.starts_with("set page(width: auto, height: auto, margin: 16pt)"));
+        assert!(session_has_style_for(&session, "page", "width"));
+        assert!(session_has_style_for(&session, "page", "height"));
+        assert!(session_has_style_for(&session, "page", "margin"));
     }
 
     #[test]
     fn default_page_setup_controls_rendered_svg_size() {
         let mut default_session = TypstSession::default();
-        let mut no_setup_session = TypstSession::new(PageSetup::None);
+        let mut no_setup_session = TypstSession::new(PageSetup::None).unwrap();
 
         let default_svg = svg_output(default_session.execute("[x]").unwrap());
         let no_setup_svg = svg_output(no_setup_session.execute("[x]").unwrap());
@@ -723,27 +708,51 @@ mod tests {
     }
 
     #[test]
-    fn page_setup_none_is_not_injected() {
-        let session = TypstSession::new(PageSetup::None);
-        let source = session.cell_source("[Test]").source;
-        assert_eq!(source, "[Test]");
+    fn page_setup_none_does_not_initialize_page_styles() {
+        let session = TypstSession::new(PageSetup::None).unwrap();
+        assert!(!session_has_style_for(&session, "page", "width"));
+        assert!(!session_has_style_for(&session, "page", "height"));
+        assert!(!session_has_style_for(&session, "page", "margin"));
     }
 
     #[test]
-    fn page_setup_custom_is_injected() {
-        let session = TypstSession::new(PageSetup::Custom("#set page(paper: \"a4\")".into()));
-        let source = session.cell_source("[Test]").source;
-        assert!(source.starts_with("set page(paper: \"a4\")"));
+    fn page_setup_custom_initializes_persistent_styles() {
+        let session = TypstSession::new(PageSetup::Custom("#set page(fill: red)".into())).unwrap();
+        assert!(session_has_style_for(&session, "page", "fill"));
+    }
+
+    #[test]
+    fn current_cell_page_size_overrides_default_but_does_not_persist() {
+        let mut session = TypstSession::default();
+        let initial_width_count = session_style_count_for(&session, "page", "width");
+
+        let wide_svg = svg_output(
+            session
+                .execute("set page(width: 300pt, height: 80pt)\n[x]")
+                .unwrap(),
+        );
+        let next_svg = svg_output(session.execute("[x]").unwrap());
+
+        assert!(svg_dimension(&wide_svg, "width") > 250.0);
+        assert!(svg_dimension(&next_svg, "width") < 100.0);
+        assert_eq!(
+            session_style_count_for(&session, "page", "width"),
+            initial_width_count
+        );
     }
 
     #[test]
     fn page_fill_persists_but_page_width_does_not() {
         let mut session = TypstSession::default();
+        let initial_width_count = session_style_count_for(&session, "page", "width");
         session
             .execute("set page(width: 3cm, fill: red)\n[First]")
             .unwrap();
         assert!(session_has_style_for(&session, "page", "fill"));
-        assert!(!session_has_style_for(&session, "page", "width"));
+        assert_eq!(
+            session_style_count_for(&session, "page", "width"),
+            initial_width_count
+        );
         assert!(svg_output(session.execute("[Second]").unwrap()).contains("<svg"));
     }
 
@@ -794,18 +803,26 @@ mod tests {
     }
 
     fn session_has_style_for(session: &TypstSession, element: &str, field: &str) -> bool {
-        session.styles.iter().any(|style| {
-            let Some(property) = style.property() else {
-                return false;
-            };
-            let Some(style_element) = style.element() else {
-                return false;
-            };
-            style_element.name() == element
-                && style_element
-                    .field_id(field)
-                    .is_some_and(|id| property.is(style_element, id))
-        })
+        session_style_count_for(session, element, field) > 0
+    }
+
+    fn session_style_count_for(session: &TypstSession, element: &str, field: &str) -> usize {
+        session
+            .styles
+            .iter()
+            .filter(|style| {
+                let Some(property) = style.property() else {
+                    return false;
+                };
+                let Some(style_element) = style.element() else {
+                    return false;
+                };
+                style_element.name() == element
+                    && style_element
+                        .field_id(field)
+                        .is_some_and(|id| property.is(style_element, id))
+            })
+            .count()
     }
 
     fn svg_dimension(svg: &str, name: &str) -> f64 {

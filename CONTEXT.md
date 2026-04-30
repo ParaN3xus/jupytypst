@@ -16,9 +16,10 @@ interactive Typst evaluation with notebook-friendly display outputs.
   `let`, `set`, and function calls directly without a leading `#`.
 - Default page setup is `set page(width: auto, height: auto, margin: 16pt)`.
   CLI users can pass `--page-setup none` or custom Typst page setup code.
-- Automatic page setup is evaluated as cell-local styles. User `set page(...)`
-  rules persist only for non-sizing fields; `paper`, `width`, and `height` are
-  filtered so the next rendered cell returns to the configured page sizing.
+- Automatic page setup is evaluated once at session initialization and stored
+  as the initial persistent styles. User `set page(...)` rules persist only for
+  non-sizing fields; `paper`, `width`, and `height` are filtered so the next
+  rendered cell returns to the configured page sizing.
 
 ## Design Notes
 
