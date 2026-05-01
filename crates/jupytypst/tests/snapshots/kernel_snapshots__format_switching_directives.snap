@@ -1,5 +1,6 @@
 ---
 source: crates/jupytypst/tests/kernel_snapshots.rs
+assertion_line: 109
 expression: "run_case(KernelCase\n{\n    init: KernelInit::new(RenderMode::Svg, SourceMode::Markup), fixtures:\n    vec![], requests:\n    vec![Request::Execute { input: \"// jupytypst: format=html\\ntest\" },\n    Request::Execute { input: \"// jupytypst: format=svg\\ntest\" },],\n})"
 ---
 init:
@@ -20,7 +21,8 @@ input: |
   ```
 effective_format: Html
 status: ok
-warnings: []
+warnings:
+  - page set rule was ignored during HTML export
 output_kind: html
 output: |
   ```html

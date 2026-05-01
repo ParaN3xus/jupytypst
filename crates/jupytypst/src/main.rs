@@ -37,9 +37,9 @@ struct StartArgs {
     /// Path to the Jupyter connection file.
     #[arg(long = "connection-file")]
     connection_file: PathBuf,
-    /// Page setup source applied at startup. Omit for `set page(width: auto, height: auto, margin: 16pt)`, or pass an empty string to disable.
-    #[arg(long, default_value = DEFAULT_PAGE_SETUP)]
-    page_setup: String,
+    /// Page setup source applied at startup. Omit to use the format default, or pass an empty string to disable.
+    #[arg(long)]
+    page_setup: Option<String>,
     /// The format of rendered kernel output.
     #[arg(short = 'f', long = "format", value_enum, default_value_t = CliOutputFormat::Svg)]
     format: CliOutputFormat,
@@ -61,9 +61,9 @@ struct ReplArgs {
     /// Print complete HTML documents instead of only the body contents.
     #[arg(long)]
     full_html: bool,
-    /// Page setup source applied at startup. Omit for `set page(width: auto, height: auto, margin: 16pt)`, or pass an empty string to disable.
-    #[arg(long, default_value = DEFAULT_PAGE_SETUP)]
-    page_setup: String,
+    /// Page setup source applied at startup. Omit to use the format default, or pass an empty string to disable.
+    #[arg(long)]
+    page_setup: Option<String>,
     #[command(flatten)]
     world: WorldArgs,
 }
@@ -214,10 +214,12 @@ async fn main() -> Result<()> {
 }
 
 async fn start_kernel(args: StartArgs) -> Result<()> {
+    let format = args.format.try_into()?;
+    let page_setup = page_setup_or_default(args.page_setup, format);
     kernel::run(
         args.connection_file,
-        args.page_setup,
-        args.format.try_into()?,
+        page_setup,
+        format,
         args.mode.into(),
         args.world.into(),
     )
@@ -225,13 +227,22 @@ async fn start_kernel(args: StartArgs) -> Result<()> {
 }
 
 fn start_repl(args: ReplArgs) -> Result<()> {
+    let format = args.format.try_into()?;
+    let page_setup = page_setup_or_default(args.page_setup, format);
     repl::run(
-        args.format.try_into()?,
+        format,
         args.mode.into(),
-        args.page_setup,
+        page_setup,
         args.full_html,
         args.world.into(),
     )
+}
+
+fn page_setup_or_default(page_setup: Option<String>, render_mode: RenderMode) -> String {
+    page_setup.unwrap_or_else(|| match render_mode {
+        RenderMode::Svg => DEFAULT_PAGE_SETUP.to_string(),
+        RenderMode::Html => String::new(),
+    })
 }
 
 fn parse_input_pair(raw: &str) -> Result<(String, String), String> {

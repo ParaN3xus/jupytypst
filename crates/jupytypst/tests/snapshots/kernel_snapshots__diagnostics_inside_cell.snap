@@ -1,5 +1,6 @@
 ---
 source: crates/jupytypst/tests/kernel_snapshots.rs
+assertion_line: 141
 expression: "run_case(KernelCase\n{\n    init: KernelInit::new(RenderMode::Html, SourceMode::Markup), fixtures:\n    vec![], requests:\n    vec![Request::Execute\n    {\n        input:\n        r#\"#let f() = panic()\n            #let g() = f()\n            #g()\"#\n    }],\n})"
 ---
 init:
@@ -7,7 +8,6 @@ init:
   source_mode: Markup
   page_setup: |
   ```typc
-  set page(width: auto, height: auto, margin: 16pt)
   ```
   inputs: []
 
@@ -24,7 +24,7 @@ status: error
 traceback: |
   ```text
   error: panicked
-    ┌─ <stdin:2>:1:12
+    ┌─ <stdin:1>:1:12
     │
   1 │ #let f() = panic()
     │            ^^^^^^^

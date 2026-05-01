@@ -45,9 +45,14 @@ impl Default for KernelInit {
 
 impl KernelInit {
     pub fn new(default_format: RenderMode, source_mode: SourceMode) -> Self {
+        let page_setup = match default_format {
+            RenderMode::Svg => DEFAULT_PAGE_SETUP.to_string(),
+            RenderMode::Html => String::new(),
+        };
         Self {
             default_format,
             source_mode,
+            page_setup,
             ..Self::default()
         }
     }

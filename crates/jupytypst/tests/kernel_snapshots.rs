@@ -191,3 +191,25 @@ invoke(f)"#
         })
     );
 }
+
+#[test]
+fn layout_warnings() {
+    insta::assert_snapshot!(
+        "layout_did_not_converge",
+        run_case(KernelCase {
+            init: KernelInit::new(RenderMode::Html, SourceMode::Code),
+            fixtures: vec![],
+            requests: vec![Request::Execute {
+                input: r#"let fill = state("fill", false)
+show list.item: it => {
+  context fill.update(not fill.get())
+  context {
+    set text(fill: fuchsia) if fill.get()
+    it
+  }
+}
+lorem(5).split().map(list.item).join()"#
+            }],
+        })
+    );
+}

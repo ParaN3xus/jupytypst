@@ -1,5 +1,6 @@
 ---
 source: crates/jupytypst/tests/kernel_snapshots.rs
+assertion_line: 153
 expression: "run_case(KernelCase\n{\n    init: KernelInit::new(RenderMode::Html, SourceMode::Code), fixtures:\n    vec![Fixture { path: \"defs.typ\", contents: \"#let f() = panic()\", },\n    Fixture { path: \"callbacks.typ\", contents: \"#let invoke(f) = f()\", },],\n    requests:\n    vec![Request::Execute { input: r#\"import \"defs.typ\": f\nf()\"# },\n    Request::Execute\n    {\n        input:\n        r#\"import \"callbacks.typ\": invoke\nlet f = () => panic()\ninvoke(f)\"#\n    },],\n})"
 ---
 init:
@@ -7,7 +8,6 @@ init:
   source_mode: Code
   page_setup: |
   ```typc
-  set page(width: auto, height: auto, margin: 16pt)
   ```
   inputs: []
 fixtures:
@@ -39,7 +39,7 @@ traceback: |
   1 │ #let f() = panic()
     │            ^^^^^^^
     │
-    ┌─ <stdin:2>:2:1
+    ┌─ <stdin:1>:2:1
     │
   2 │ f()
     │ --- error occurred in this call of function `f`
@@ -58,7 +58,7 @@ status: error
 traceback: |
   ```text
   error: panicked
-    ┌─ <stdin:3>:2:15
+    ┌─ <stdin:2>:2:15
     │
   2 │ let f = () => panic()
     │               ^^^^^^^

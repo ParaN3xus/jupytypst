@@ -1,0 +1,51 @@
+---
+source: crates/jupytypst/tests/kernel_snapshots.rs
+expression: "run_case(KernelCase\n{\n    init: KernelInit::new(RenderMode::Html, SourceMode::Code), fixtures:\n    vec![], requests:\n    vec![Request::Execute\n    {\n        input:\n        r#\"let fill = state(\"fill\", false)\nshow list.item: it => {\n  context fill.update(not fill.get())\n  context {\n    set text(fill: fuchsia) if fill.get()\n    it\n  }\n}\nlorem(5).split().map(list.item).join()\"#\n    }],\n})"
+---
+init:
+  default_format: Html
+  source_mode: Code
+  page_setup: |
+  ```typc
+  ```
+  inputs: []
+
+--- request 1 ---
+kind: execute
+input: |
+  ```typ
+  let fill = state("fill", false)
+  show list.item: it => {
+    context fill.update(not fill.get())
+    context {
+      set text(fill: fuchsia) if fill.get()
+      it
+    }
+  }
+  lorem(5).split().map(list.item).join()
+  ```
+effective_format: Html
+status: ok
+warnings:
+  - layout did not converge within 5 attempts
+output_kind: html
+output: |
+  ```html
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+    </head>
+    <body>
+      <ul>
+        <li>Lorem</li>
+        <li>ipsum</li>
+        <li>dolor</li>
+        <li>sit</li>
+        <li>amet.</li>
+      </ul>
+    </body>
+  </html>
+
+  ```

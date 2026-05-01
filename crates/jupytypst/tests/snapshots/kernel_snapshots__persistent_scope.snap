@@ -1,5 +1,6 @@
 ---
 source: crates/jupytypst/tests/kernel_snapshots.rs
+assertion_line: 6
 expression: "run_case(KernelCase\n{\n    init: KernelInit::new(RenderMode::Html, SourceMode::Code), fixtures:\n    vec![], requests:\n    vec![Request::Execute { input: \"let f(a, b) = a + b; let x = 1\" },\n    Request::Execute { input: \"f(1, 2) + x\" },],\n})"
 ---
 init:
@@ -7,7 +8,6 @@ init:
   source_mode: Code
   page_setup: |
   ```typc
-  set page(width: auto, height: auto, margin: 16pt)
   ```
   inputs: []
 

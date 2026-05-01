@@ -6,7 +6,7 @@ use ecow::{EcoVec, eco_vec};
 use tinymist_world::system::TypstSystemWorld;
 use tinymist_world::{EntryState, ShadowApi, TaskInputs};
 use typst::World;
-use typst::diag::SourceDiagnostic;
+use typst::diag::{SourceDiagnostic, Warned};
 use typst::engine::{Engine, Route, Sink, Traced};
 use typst::foundations::{Bytes, Content, Context, Scope, Scopes, Styles};
 use typst::introspection::Introspector;
@@ -183,8 +183,8 @@ impl TypstReplSession {
             RenderMode::Svg => self.render_svg(content),
             RenderMode::Html => self.render_html(content),
         };
-        let output = match output {
-            Ok(output) => output,
+        let rendered = match output {
+            Ok(rendered) => rendered,
             Err(diagnostics) => {
                 let diagnostics = self.prepare_diagnostics(diagnostics, evaluated.source_map_index);
                 return Err(diagnostics);
@@ -194,9 +194,12 @@ impl TypstReplSession {
             .extend((self.persistence.collect_introspection_updates)(
                 &evaluated.content,
             ));
+        let mut warnings = evaluated.warnings;
+        warnings.extend(self.prepare_diagnostics(rendered.warnings, evaluated.source_map_index));
+
         Ok(ExecutionResult {
-            output,
-            warnings: evaluated.warnings,
+            output: rendered.output,
+            warnings,
         })
     }
 
@@ -380,16 +383,16 @@ impl TypstReplSession {
         }
     }
 
-    fn render_svg(&self, content: Content) -> typst::diag::SourceResult<ExecutionOutput> {
+    fn render_svg(&self, content: Content) -> typst::diag::SourceResult<Warned<ExecutionOutput>> {
         let world = self.world.paged_task();
         let document = layout_current_document(world.as_ref(), &content)?;
-        Ok(ExecutionOutput::Paged(document))
+        Ok(document.map(ExecutionOutput::Paged))
     }
 
-    fn render_html(&self, content: Content) -> typst::diag::SourceResult<ExecutionOutput> {
+    fn render_html(&self, content: Content) -> typst::diag::SourceResult<Warned<ExecutionOutput>> {
         let world = self.world.html_task();
         let document = layout_current_document(world.as_ref(), &content)?;
-        Ok(ExecutionOutput::Html(document))
+        Ok(document.map(ExecutionOutput::Html))
     }
 
     fn with_introspection_context(&self, content: Content) -> Content {
